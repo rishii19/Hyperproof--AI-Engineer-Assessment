@@ -357,3 +357,11 @@ def test_find_free_slots_in_range_is_registered_as_a_tool():
     from scheduler.tools import TOOLS
 
     assert TOOLS["find_free_slots_in_range"] is find_free_slots_in_range
+
+
+def test_get_busy_times_rejects_weekends_and_unparsable_dates():
+    store = Store.load()
+    for date in ["2026-11-07", "next tuesday"]:
+        with pytest.raises(ToolError) as excinfo:
+            get_busy_times(store, "sam", date)
+        assert date in str(excinfo.value)

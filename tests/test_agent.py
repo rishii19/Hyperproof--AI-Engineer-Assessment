@@ -179,3 +179,16 @@ def test_list_people_withholds_personal_contact_details():
     assert json.loads(result["content"])[0] == {
         "id": "priya", "name": "Priya Raman", "title": "Engineering Manager",
     }
+
+
+def test_agent_feeds_get_busy_times_date_errors_back_to_the_model():
+    for date in ["2026-11-07", "next tuesday"]:
+        model = FakeModel([
+            tool_call("get_busy_times", person="sam", date=date),
+            final("Recovered."),
+        ])
+
+        assert SchedulingAgent(model, Store.load()).run("when is Sam busy?") == "Recovered."
+        feedback = model.calls[1][-1]
+        assert feedback["role"] == "tool"
+        assert date in json.loads(feedback["content"])["error"], date
