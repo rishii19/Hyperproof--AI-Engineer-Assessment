@@ -246,6 +246,30 @@ def test_system_prompt_documents_the_range_tool():
     assert "find_free_slots_in_range" in system
 
 
+def test_system_prompt_states_the_range_tool_contract():
+    """Naming the tool is not enough: say the limits it answers within.
+
+    Each of these changes what the model does next. `truncated` says the
+    list was cut short; the cap and the 14-day span say how far a second
+    search can stretch; the weekend rule says an all-weekend range comes
+    back as an error, not as an empty week. The claim that a short list
+    reaches every day is not one of them - the round-robin fills up from
+    the earliest days and stops - so it must not be here to be believed.
+    """
+    model = FakeModel([final("ok")])
+    SchedulingAgent(model, Store.load()).run("hi")
+    # The prompt is wrapped prose, so every phrase below is checked against
+    # it with the line breaks flattened: rewrapping a paragraph should not
+    # fail a test about what the paragraph says.
+    system = " ".join(model.calls[0][0]["content"].split())
+
+    assert "truncated" in system
+    assert "capped at 20" in system
+    assert "at most 14 days" in system
+    assert "no weekday in it is rejected as an error" in system
+    assert "every day that has something free" not in system
+
+
 def test_list_people_withholds_personal_contact_details():
     model = FakeModel([tool_call("list_people"), final("Here they are.")])
     agent = SchedulingAgent(model, Store.load())

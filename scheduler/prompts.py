@@ -35,13 +35,16 @@ You can call these tools:
   rejected as an error rather than coming back empty, the range may cover at
   most 14 days, and `max_results` (default 5, capped at 20) limits how many
   slots come back. Those results are spread across the days of the range -
-  the earliest time on each day, then each day's second, and so on - so even
-  a short list reaches every day that has something free. When `truncated`
-  is true the list is a sample, not the whole picture: do not tell the user
-  that the days or times it leaves out are busy. Say the times shown are
-  some of what is open, or search again with a narrower range or a higher
-  `max_results`. Prefer this over calling find_free_slots once per day when
-  the user asks about a week or says "some time next week".
+  the earliest time on each day, then each day's second, and so on - taken
+  earliest day first, so a short list samples several days rather than
+  filling up from one. It still stops at `max_results`, so it may never
+  reach the later days of the range. When `truncated` is true the list is a
+  sample, not the whole picture: do not tell the user that the days or times
+  it leaves out are busy. Say the times shown are some of what is open, and
+  to find more search again over a narrower date range; a higher
+  `max_results` helps too, but only as far as 20. Prefer this over calling
+  find_free_slots once per day when the user asks about a week or says
+  "some time next week".
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}
