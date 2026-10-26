@@ -110,6 +110,20 @@ def test_agent_survives_an_unexpected_tool_exception(monkeypatch):
     assert "kaboom" in json.loads(model.calls[1][-1]["content"])["error"]
 
 
+def test_agent_survives_an_unserialisable_tool_result(monkeypatch):
+    def gives_a_set(store):
+        return {"priya", "sam"}
+
+    monkeypatch.setitem(agent_module.TOOLS, "list_people", gives_a_set)
+    model = FakeModel([tool_call("list_people"), final("Recovered.")])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("hi") == "Recovered."
+    feedback = model.calls[1][-1]
+    assert feedback["role"] == "tool"
+    assert "error" in json.loads(feedback["content"])
+
+
 def test_agent_gives_up_after_max_steps():
     model = FakeModel([tool_call("list_people")], loop_last=True)
     agent = SchedulingAgent(model, Store.load(), max_steps=8)

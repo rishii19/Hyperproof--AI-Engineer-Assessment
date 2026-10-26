@@ -118,13 +118,17 @@ class SchedulingAgent:
                     return action["final"]
                 try:
                     result = TOOLS[action["tool"]](self.store, **action["args"])
+                    # Serialising here, inside the try, means a result the
+                    # tool cannot hand back as JSON is reported like any
+                    # other tool failure instead of escaping the loop.
+                    content = json.dumps(result)
                 except (TypeError, ToolError) as exc:
                     error = str(exc)
                 except Exception as exc:  # a tool bug must not kill the loop
                     error = f"{type(exc).__name__}: {exc}"
                 else:
                     consecutive_errors = 0
-                    messages.append({"role": "tool", "content": json.dumps(result)})
+                    messages.append({"role": "tool", "content": content})
                     continue
 
             messages.append({"role": "tool", "content": json.dumps({"error": error})})
