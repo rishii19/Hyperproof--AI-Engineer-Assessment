@@ -212,3 +212,43 @@ def test_agent_falls_back_when_the_model_call_fails():
 
     assert agent.run("Find an hour for Priya and Sam") == agent_module.FALLBACK_ANSWER
     assert model.calls == 1  # no retry
+
+
+def test_agent_finds_a_fenced_action_after_prose():
+    model = FakeModel([
+        "Let me check their calendars.\n\n```json\n"
+        + tool_call("find_free_slots", attendees=["priya", "sam"],
+                    date="2026-11-03", duration_minutes=60, earliest="12:00")
+        + "\n```\n",
+        final("13:00 works for both."),
+    ])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("Find an hour on Tuesday afternoon") == "13:00 works for both."
+    assert {"start": "13:00", "end": "14:00"} in json.loads(
+        model.calls[1][-1]["content"]
+    )
+
+
+def test_agent_rejects_a_reply_with_two_fenced_blocks():
+    model = FakeModel([
+        "Either of these:\n```json\n" + final("First") + "\n```\n"
+        "or\n```json\n" + final("Second") + "\n```",
+        final("Recovered."),
+    ])
+    agent = SchedulingAgent(model, Store.load())
+
+    # Two candidate actions is a guess, not a parse: ask for one instead.
+    assert agent.run("hi") == "Recovered."
+    assert "error" in json.loads(model.calls[1][-1]["content"])
+
+
+def test_agent_rejects_an_unfenced_object_buried_in_prose():
+    model = FakeModel([
+        'I think ' + final("Buried") + ' is the answer.',
+        final("Recovered."),
+    ])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("hi") == "Recovered."
+    assert "error" in json.loads(model.calls[1][-1]["content"])

@@ -13,13 +13,19 @@ FALLBACK_ANSWER = (
     "request, with the people and the date you have in mind?"
 )
 
-FENCE_PATTERN = re.compile(r"\A\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*\Z", re.DOTALL)
+FENCE_PATTERN = re.compile(r"```(?:json)?[ \t]*\r?\n?(.*?)```", re.DOTALL)
 
 
-def strip_code_fence(raw: str) -> str:
-    """Remove a single surrounding ```json ... ``` fence, if there is one."""
-    match = FENCE_PATTERN.match(raw)
-    return match.group(1) if match else raw
+def fenced_blocks(raw: str) -> list[str]:
+    """Return the contents of every ``` fenced block in a reply, in order."""
+    return FENCE_PATTERN.findall(raw)
+
+
+def _invalid_json(exc: ValueError) -> str:
+    return (
+        f"Your reply was not valid JSON ({exc}). Reply with a single JSON "
+        'object: {"tool": ..., "args": {...}} or {"final": "..."}.'
+    )
 
 
 def parse_action(raw: str) -> tuple[dict | None, str | None]:
@@ -32,12 +38,19 @@ def parse_action(raw: str) -> tuple[dict | None, str | None]:
         return None, "Your reply must be text containing a single JSON object."
 
     try:
-        action = json.loads(strip_code_fence(raw))
+        action = json.loads(raw)
     except ValueError as exc:
-        return None, (
-            f"Your reply was not valid JSON ({exc}). Reply with a single JSON "
-            'object: {"tool": ..., "args": {...}} or {"final": "..."}.'
-        )
+        # Models like to fence the object, and to think out loud before it.
+        # A single fenced block is unambiguous, so read the action out of
+        # that; with none, or with several to choose between, guessing which
+        # one was meant is worse than asking for a clean reply.
+        blocks = fenced_blocks(raw)
+        if len(blocks) != 1:
+            return None, _invalid_json(exc)
+        try:
+            action = json.loads(blocks[0])
+        except ValueError as fenced_exc:
+            return None, _invalid_json(fenced_exc)
 
     if not isinstance(action, dict):
         return None, (
