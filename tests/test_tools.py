@@ -64,3 +64,45 @@ def test_find_free_slots_rejects_bad_durations():
                 store, attendees=["luis"], date="2026-11-02",
                 duration_minutes=duration,
             )
+
+
+def test_earliest_rounds_up_and_latest_rounds_down():
+    store = Store.load()
+    slots = find_free_slots(
+        store, attendees=["luis"], date="2026-11-02", duration_minutes=30,
+        earliest="13:10", latest="15:50",
+    )
+    # 13:10 rounds up to 13:30; 15:50 rounds down to 15:30.
+    assert slots == [
+        {"start": "13:30", "end": "14:00"},
+        {"start": "14:00", "end": "14:30"},
+        {"start": "14:30", "end": "15:00"},
+        {"start": "15:00", "end": "15:30"},
+    ]
+
+
+def test_bounds_outside_the_working_day_are_clamped():
+    store = Store.load()
+    slots = find_free_slots(
+        store, attendees=["luis"], date="2026-11-02", duration_minutes=30,
+        earliest="06:00", latest="23:00",
+    )
+    assert len(slots) == 16
+
+
+def test_find_free_slots_rejects_bad_bounds():
+    store = Store.load()
+    bad = [
+        {"earliest": "14:00", "latest": "14:00"},
+        {"earliest": "15:00", "latest": "13:00"},
+        {"earliest": "9am"},
+        {"latest": "25:00"},
+        {"earliest": "1300"},
+        {"latest": "13:60"},
+    ]
+    for bounds in bad:
+        with pytest.raises(ValueError):
+            find_free_slots(
+                store, attendees=["luis"], date="2026-11-02",
+                duration_minutes=30, **bounds,
+            )

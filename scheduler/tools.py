@@ -2,18 +2,34 @@
 and returns JSON-serialisable data."""
 
 import math
+import re
 
 from .slots import (
     SLOT_MINUTES,
+    SLOTS_PER_DAY,
     availability_from_busy,
     combine_availability,
     find_free_windows,
     slot_to_time,
+    time_to_minutes,
     time_to_slot,
+    time_to_slot_ceil,
 )
 from .store import Store
 
 MAX_DURATION_MINUTES = 480  # one full working day
+CLOCK_PATTERN = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+
+
+def _bound_to_slot(clock: str, label: str, convert) -> int:
+    """Turn an HH:MM search bound into a slot index inside the working day.
+
+    `convert` decides the rounding: `earliest` rounds up so the meeting never
+    starts before the bound, `latest` rounds down so it never ends after it.
+    """
+    if not isinstance(clock, str) or not CLOCK_PATTERN.match(clock):
+        raise ValueError(f"{label} must be a time in HH:MM form, got {clock!r}")
+    return max(0, min(SLOTS_PER_DAY, convert(clock)))
 
 
 def list_people(store: Store) -> list[dict]:
@@ -58,8 +74,12 @@ def find_free_slots(
 
     free = combine_availability(calendars)
     slots_needed = math.ceil(duration_minutes / SLOT_MINUTES)
-    start_slot = time_to_slot(earliest) if earliest else 0
-    end_slot = time_to_slot(latest) if latest else None
+    start_slot = _bound_to_slot(earliest, "earliest", time_to_slot_ceil) if earliest else 0
+    end_slot = _bound_to_slot(latest, "latest", time_to_slot) if latest else SLOTS_PER_DAY
+    if earliest and latest and time_to_minutes(earliest) >= time_to_minutes(latest):
+        raise ValueError(
+            f"earliest ({earliest}) must be before latest ({latest})"
+        )
 
     starts = find_free_windows(free, slots_needed, start_slot, end_slot)
     return [
