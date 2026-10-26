@@ -78,7 +78,7 @@ def find_free_windows(
     if end_slot is None:
         end_slot = SLOTS_PER_DAY
     results = []
-    for start in range(start_slot, end_slot - slots_needed):
+    for start in range(start_slot, end_slot - slots_needed + 1):
         if all(free[start:start + slots_needed]):
             results.append(start)
     return results
