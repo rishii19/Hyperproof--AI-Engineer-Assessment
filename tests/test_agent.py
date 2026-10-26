@@ -33,6 +33,16 @@ def test_system_prompt_includes_directory():
     SchedulingAgent(model, Store.load()).run("hi")
     system = model.calls[0][0]["content"]
     assert "Priya Raman" in system
+    assert "Engineering Manager" in system
+
+
+def test_system_prompt_omits_personal_contact_details():
+    model = FakeModel([final("ok")])
+    SchedulingAgent(model, Store.load()).run("hi")
+    system = model.calls[0][0]["content"]
+    for secret in ["priya.raman@northwind.example", "555-0142", "Oakland",
+                   "email", "phone", "home_city", "manager"]:
+        assert secret not in system, secret
 
 
 def test_agent_strips_a_json_code_fence():

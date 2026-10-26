@@ -7,7 +7,14 @@ from scheduler.tools import ToolError, find_free_slots, get_busy_times
 def test_get_busy_times():
     store = Store.load()
     busy = get_busy_times(store, "sam", "2026-11-04")
-    assert busy == [{"start": "09:00", "end": "09:30", "title": "Standup"}]
+    assert busy == [{"start": "09:00", "end": "09:30"}]
+
+
+def test_get_busy_times_withholds_meeting_titles():
+    store = Store.load()
+    busy = get_busy_times(store, "dana", "2026-11-03")
+    # "Reorg discussion (confidential)" is none of the agent's business.
+    assert busy == [{"start": "11:00", "end": "12:00"}]
 
 
 def test_find_free_slots_for_two_people_in_the_afternoon():

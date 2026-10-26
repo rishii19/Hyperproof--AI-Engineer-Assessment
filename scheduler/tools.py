@@ -89,9 +89,14 @@ def list_people(store: Store) -> list[dict]:
 
 
 def get_busy_times(store: Store, person: str, date: str) -> list[dict]:
-    """Return a person's busy blocks on a date (YYYY-MM-DD)."""
+    """Return the times a person is busy on a date (YYYY-MM-DD).
+
+    Only start and end are returned: meeting titles can be confidential and
+    the agent does not need them to find a free slot.
+    """
     _check_person(store, person)
-    return store.calendars.get(person, {}).get(date, [])
+    busy = store.calendars.get(person, {}).get(date, [])
+    return [{"start": block["start"], "end": block["end"]} for block in busy]
 
 
 def find_free_slots(
