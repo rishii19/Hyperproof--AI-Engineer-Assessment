@@ -192,3 +192,23 @@ def test_agent_feeds_get_busy_times_date_errors_back_to_the_model():
         feedback = model.calls[1][-1]
         assert feedback["role"] == "tool"
         assert date in json.loads(feedback["content"])["error"], date
+
+
+class ExplodingModel:
+    """A model whose endpoint is down: every call raises."""
+
+    def __init__(self, error=None):
+        self.calls = 0
+        self.error = error or TimeoutError("request timed out")
+
+    def complete(self, messages):
+        self.calls += 1
+        raise self.error
+
+
+def test_agent_falls_back_when_the_model_call_fails():
+    model = ExplodingModel()
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("Find an hour for Priya and Sam") == agent_module.FALLBACK_ANSWER
+    assert model.calls == 1  # no retry

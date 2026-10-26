@@ -80,7 +80,8 @@ class SchedulingAgent:
         it is described back to the model as a tool result so that the next
         turn can correct it. If the model runs past `max_steps` turns, or gets
         `max_consecutive_errors` replies wrong in a row, give up and say so
-        rather than looping forever.
+        rather than looping forever. If the model call itself fails, give up
+        immediately with the same answer.
         """
         messages = [
             {"role": "system", "content": build_system_prompt(self.store.people, self.today)},
@@ -89,7 +90,13 @@ class SchedulingAgent:
 
         consecutive_errors = 0
         for _ in range(self.max_steps):
-            raw = self.model.complete(messages)
+            try:
+                raw = self.model.complete(messages)
+            except Exception:
+                # The endpoint is down, timing out or rejecting us. Retrying
+                # would most likely fail the same way, so say so at once
+                # rather than burning the remaining steps on it.
+                return FALLBACK_ANSWER
             messages.append({"role": "assistant", "content": raw})
 
             action, error = parse_action(raw)
