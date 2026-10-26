@@ -19,6 +19,8 @@ from .slots import (
 from .store import Store
 
 MAX_DURATION_MINUTES = 480  # one full working day
+MAX_RANGE_DAYS = 14  # a date range may span at most a fortnight
+MAX_RESULTS_CAP = 20  # a range search never returns more than this
 CLOCK_PATTERN = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -58,13 +60,23 @@ def _check_attendees(store: Store, attendees) -> None:
         )
 
 
-def _check_date(value) -> None:
+def _parse_date(value, label: str = "date") -> datetime.date:
+    """Validate a YYYY-MM-DD string and return it as a date.
+
+    `label` names the argument in the error message, so a range search can
+    say which end of it was wrong.
+    """
     if not isinstance(value, str) or not DATE_PATTERN.match(value):
-        raise ToolError(f"date must be in YYYY-MM-DD form, got {value!r}")
+        raise ToolError(f"{label} must be in YYYY-MM-DD form, got {value!r}")
     try:
-        parsed = datetime.date.fromisoformat(value)
+        return datetime.date.fromisoformat(value)
     except ValueError:
-        raise ToolError(f"date {value!r} is not a real calendar date") from None
+        raise ToolError(f"{label} {value!r} is not a real calendar date") from None
+
+
+def _check_date(value) -> None:
+    """Validate a single meeting date. Weekends are not meeting days."""
+    parsed = _parse_date(value)
     if parsed.weekday() >= 5:
         raise ToolError(
             f"{value} is a {parsed.strftime('%A')}; meetings are only "
@@ -72,14 +84,57 @@ def _check_date(value) -> None:
         )
 
 
-def _bound_to_slot(clock: str, label: str, convert) -> int:
+def _check_duration(duration_minutes) -> None:
+    if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
+        raise ToolError(
+            f"duration_minutes must be a whole number of minutes, "
+            f"got {duration_minutes!r}"
+        )
+    if not 0 < duration_minutes <= MAX_DURATION_MINUTES:
+        raise ToolError(
+            f"duration_minutes must be between 1 and {MAX_DURATION_MINUTES}, "
+            f"got {duration_minutes}"
+        )
+
+
+def _check_bounds(earliest, latest) -> None:
+    """Validate the optional HH:MM search bounds, together and apart."""
+    for label, clock in (("earliest", earliest), ("latest", latest)):
+        if clock is None:
+            continue
+        if not isinstance(clock, str) or not CLOCK_PATTERN.match(clock):
+            raise ToolError(
+                f"{label} must be a time in HH:MM form, got {clock!r}"
+            )
+    if earliest and latest and time_to_minutes(earliest) >= time_to_minutes(latest):
+        raise ToolError(
+            f"earliest ({earliest}) must be before latest ({latest})"
+        )
+
+
+def _check_max_results(max_results) -> int:
+    """Validate max_results and return it clamped to the hard cap.
+
+    Asking for more than the cap is not an error - the model gets the cap's
+    worth of slots, which is plenty to choose from - but 0 or a negative is
+    too ambiguous to guess at ("none" or "all"?), so say so instead.
+    """
+    if isinstance(max_results, bool) or not isinstance(max_results, int):
+        raise ToolError(
+            f"max_results must be a whole number, got {max_results!r}"
+        )
+    if max_results < 1:
+        raise ToolError(f"max_results must be at least 1, got {max_results}")
+    return min(max_results, MAX_RESULTS_CAP)
+
+
+def _bound_to_slot(clock: str, convert) -> int:
     """Turn an HH:MM search bound into a slot index inside the working day.
 
     `convert` decides the rounding: `earliest` rounds up so the meeting never
     starts before the bound, `latest` rounds down so it never ends after it.
+    The bound has already been validated by `_check_bounds`.
     """
-    if not isinstance(clock, str) or not CLOCK_PATTERN.match(clock):
-        raise ToolError(f"{label} must be a time in HH:MM form, got {clock!r}")
     return max(0, min(SLOTS_PER_DAY, convert(clock)))
 
 
@@ -115,16 +170,8 @@ def find_free_slots(
     """
     _check_attendees(store, attendees)
     _check_date(date)
-    if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
-        raise ToolError(
-            f"duration_minutes must be a whole number of minutes, "
-            f"got {duration_minutes!r}"
-        )
-    if not 0 < duration_minutes <= MAX_DURATION_MINUTES:
-        raise ToolError(
-            f"duration_minutes must be between 1 and {MAX_DURATION_MINUTES}, "
-            f"got {duration_minutes}"
-        )
+    _check_duration(duration_minutes)
+    _check_bounds(earliest, latest)
 
     calendars = []
     for person in attendees:
@@ -133,12 +180,8 @@ def find_free_slots(
 
     free = combine_availability(calendars)
     slots_needed = math.ceil(duration_minutes / SLOT_MINUTES)
-    start_slot = _bound_to_slot(earliest, "earliest", time_to_slot_ceil) if earliest else 0
-    end_slot = _bound_to_slot(latest, "latest", time_to_slot) if latest else SLOTS_PER_DAY
-    if earliest and latest and time_to_minutes(earliest) >= time_to_minutes(latest):
-        raise ToolError(
-            f"earliest ({earliest}) must be before latest ({latest})"
-        )
+    start_slot = _bound_to_slot(earliest, time_to_slot_ceil) if earliest else 0
+    end_slot = _bound_to_slot(latest, time_to_slot) if latest else SLOTS_PER_DAY
 
     starts = find_free_windows(free, slots_needed, start_slot, end_slot)
     return [
@@ -147,8 +190,67 @@ def find_free_slots(
     ]
 
 
+def find_free_slots_in_range(
+    store: Store,
+    attendees: list[str],
+    start_date: str,
+    end_date: str,
+    duration_minutes: int,
+    earliest: str | None = None,
+    latest: str | None = None,
+    max_results: int = 5,
+) -> list[dict]:
+    """Find times across a date range when all attendees are free.
+
+    Searches every weekday from `start_date` to `end_date` inclusive -
+    Saturdays and Sundays are skipped, though the range may start or end on
+    one - and returns at most `max_results` slots (20 at the very most),
+    each tagged with the `date` it falls on. The range itself may span at
+    most 14 days, so "next week" works but "some time this year" does not.
+
+    `duration_minutes`, `earliest` and `latest` mean what they do in
+    `find_free_slots`, which does the per-day work.
+    """
+    # Validate everything up front: a range with no weekdays in it searches
+    # nothing, and silently returning [] would hide a bad argument.
+    _check_attendees(store, attendees)
+    start = _parse_date(start_date, "start_date")
+    end = _parse_date(end_date, "end_date")
+    if end < start:
+        raise ToolError(
+            f"end_date ({end_date}) must not be before start_date "
+            f"({start_date})"
+        )
+    span_days = (end - start).days + 1
+    if span_days > MAX_RANGE_DAYS:
+        raise ToolError(
+            f"The range {start_date} to {end_date} covers {span_days} days; "
+            f"search at most {MAX_RANGE_DAYS} days at a time"
+        )
+    _check_duration(duration_minutes)
+    _check_bounds(earliest, latest)
+    limit = _check_max_results(max_results)
+
+    # Days ascend and find_free_slots returns each day's slots in time
+    # order, so the results come out sorted by date then time already.
+    results: list[dict] = []
+    day = start
+    while day <= end and len(results) < limit:
+        if day.weekday() < 5:
+            date = day.isoformat()
+            for slot in find_free_slots(
+                store, attendees, date, duration_minutes, earliest, latest
+            ):
+                results.append({"date": date, **slot})
+                if len(results) >= limit:
+                    break
+        day += datetime.timedelta(days=1)
+    return results
+
+
 TOOLS = {
     "list_people": list_people,
     "get_busy_times": get_busy_times,
     "find_free_slots": find_free_slots,
+    "find_free_slots_in_range": find_free_slots_in_range,
 }

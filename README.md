@@ -3,7 +3,9 @@
 A small agentic assistant that helps employees find meeting times. A user
 types a request in plain English ("find 45 minutes with Priya and Sam next
 Tuesday afternoon"); a language model turns it into tool calls; the tools
-look up calendars and compute when everyone is free.
+look up calendars and compute when everyone is free. A request can name one
+day or a range of them ("some time next week"), which the agent searches a
+weekday at a time.
 
 This codebase was written quickly by an AI coding agent. Treat it the way you
 would treat code you inherited from a teammate: it runs, and the tests pass,
@@ -36,7 +38,8 @@ python main.py "Find an hour for Priya and Sam on Tuesday afternoon"
 ```
 
 Sample calendar data covers Monday 2 November to Wednesday 4 November 2026.
-"Today" is Monday 2 November 2026.
+"Today" is Monday 2 November 2026. A search over a range may run past that
+window; days with no data in `calendars.json` simply come back wide open.
 
 ## Models
 

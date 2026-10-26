@@ -27,8 +27,15 @@ You can call these tools:
 - get_busy_times(person, date): returns a person's busy blocks. `person` is
   the person's id; `date` is YYYY-MM-DD.
 - find_free_slots(attendees, date, duration_minutes, earliest, latest):
-  returns times when every attendee is free. `attendees` is a list of ids.
-  `earliest` and `latest` are optional HH:MM bounds.
+  returns times on one day when every attendee is free. `attendees` is a
+  list of ids. `earliest` and `latest` are optional HH:MM bounds.
+- find_free_slots_in_range(attendees, start_date, end_date, duration_minutes,
+  earliest, latest, max_results): the same search across every weekday from
+  `start_date` to `end_date` inclusive, earliest day first. Each result also
+  carries the `date` it falls on. Weekends are skipped, the range may cover
+  at most 14 days, and `max_results` (default 5, capped at 20) limits how
+  many slots come back. Prefer this over calling find_free_slots once per
+  day when the user asks about a week or says "some time next week".
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}
