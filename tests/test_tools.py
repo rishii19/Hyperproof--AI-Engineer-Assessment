@@ -267,15 +267,16 @@ def test_find_free_slots_in_range_spreads_its_five_results_across_days():
     store = Store.load()
     results = find_free_slots_in_range(
         store, attendees=["luis"], start_date="2026-11-02",
-        end_date="2026-11-06", duration_minutes=30,
+        end_date="2026-11-04", duration_minutes=30,
     )
-    # Five weekdays, five results: the earliest window of each day.
+    # 3 days x 5 results forces a second round, so this pins rank order,
+    # not just day coverage.
     assert results == [
         {"date": "2026-11-02", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-02", "start": "09:30", "end": "10:00"},
         {"date": "2026-11-03", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-03", "start": "09:30", "end": "10:00"},
         {"date": "2026-11-04", "start": "09:00", "end": "09:30"},
-        {"date": "2026-11-05", "start": "09:00", "end": "09:30"},
-        {"date": "2026-11-06", "start": "09:00", "end": "09:30"},
     ]
 
 
