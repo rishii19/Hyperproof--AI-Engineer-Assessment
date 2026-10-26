@@ -49,6 +49,10 @@ def availability_from_busy(busy_blocks: list[dict]) -> list[bool]:
     """
     free = [True] * SLOTS_PER_DAY
     for block in busy_blocks:
+        # Reversed/zero-length intervals must fail closed, not mark zero
+        # slots busy and accidentally advertise occupied time as free.
+        if time_to_minutes(block["start"]) >= time_to_minutes(block["end"]):
+            raise ValueError("Calendar busy block must have start before end")
         start = max(0, time_to_slot(block["start"]))
         end = min(SLOTS_PER_DAY, time_to_slot_ceil(block["end"]))
         for i in range(start, end):

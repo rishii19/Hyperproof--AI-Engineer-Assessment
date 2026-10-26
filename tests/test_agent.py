@@ -33,7 +33,7 @@ def withheld_values() -> list[str]:
 def test_agent_returns_final_answer():
     model = FakeModel([final("Happy to help!")])
     agent = SchedulingAgent(model, Store.load())
-    assert agent.run("hello") == "Happy to help!"
+    assert agent.run("hello") == agent_module.FALLBACK_ANSWER  # no verified tool result
 
 
 def test_agent_calls_tool_and_returns_result_to_model():
@@ -46,7 +46,8 @@ def test_agent_calls_tool_and_returns_result_to_model():
 
     answer = agent.run("Find an hour for Priya and Sam on Tuesday afternoon")
 
-    assert answer == "13:00 works for both."
+    assert "13:00–14:00" in answer and "16:00–17:00" in answer
+    assert answer.startswith("Verified availability for Priya Raman, Sam Okafor")
     second_call = model.calls[1]
     assert second_call[-1]["role"] == "tool"
     assert {"start": "13:00", "end": "14:00"} in json.loads(second_call[-1]["content"])
@@ -70,14 +71,14 @@ def test_system_prompt_omits_personal_contact_details():
 
 def test_agent_strips_a_json_code_fence():
     model = FakeModel(["```json\n" + final("Fenced answer") + "\n```"])
-    assert SchedulingAgent(model, Store.load()).run("hi") == "Fenced answer"
+    assert SchedulingAgent(model, Store.load()).run("hi") == agent_module.FALLBACK_ANSWER
 
 
 def test_agent_feeds_malformed_json_back_to_the_model():
     model = FakeModel(["I think Tuesday works?", final("Recovered.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     feedback = model.calls[1][-1]
     assert feedback["role"] == "tool"
     assert "error" in json.loads(feedback["content"])
@@ -95,7 +96,7 @@ def test_agent_reports_badly_shaped_actions():
     for raw in bad_replies:
         model = FakeModel([raw, final("Recovered.")])
         answer = SchedulingAgent(model, Store.load()).run("hi")
-        assert answer == "Recovered."
+        assert answer == agent_module.FALLBACK_ANSWER
         feedback = model.calls[1][-1]
         assert feedback["role"] == "tool"
         assert "error" in json.loads(feedback["content"]), raw
@@ -110,7 +111,8 @@ def test_agent_feeds_tool_errors_back_to_the_model():
     store = Store.load()
     agent = SchedulingAgent(model, store)
 
-    assert agent.run("hi") == "Recovered."
+    answer = agent.run("hi")
+    assert "bob" in answer and "couldn't find" in answer
     # A ToolError is written for the model, so it reaches it word for word
     # rather than being flattened into the generic failure.
     with pytest.raises(ToolError) as excinfo:
@@ -135,7 +137,7 @@ def test_agent_feeds_bad_tool_arguments_back_to_the_model():
         model = FakeModel([raw, final("Recovered.")])
         agent = SchedulingAgent(model, Store.load())
 
-        assert agent.run("hi") == "Recovered."
+        assert agent.run("hi") == agent_module.FALLBACK_ANSWER
         error = json.loads(model.calls[1][-1]["content"])["error"]
         assert error == expected, raw
         assert error != agent_module.TOOL_FAILED, raw
@@ -149,7 +151,7 @@ def test_agent_survives_an_unexpected_tool_exception(monkeypatch):
     model = FakeModel([tool_call("list_people"), final("Recovered.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     feedback = model.calls[1][-1]["content"]
     assert json.loads(feedback)["error"] == agent_module.TOOL_FAILED
     assert "kaboom" not in feedback
@@ -163,7 +165,7 @@ def test_agent_hides_a_type_error_raised_inside_a_tool(monkeypatch):
     model = FakeModel([tool_call("list_people"), final("Recovered.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     # The call itself was fine, so a TypeError from inside the tool is a bug
     # in the tool. Repeating it as an argument error would only send the
     # model off correcting arguments that were right all along.
@@ -180,7 +182,7 @@ def test_agent_survives_an_unserialisable_tool_result(monkeypatch):
     model = FakeModel([tool_call("list_people"), final("Recovered.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     feedback = model.calls[1][-1]
     assert feedback["role"] == "tool"
     assert json.loads(feedback["content"])["error"] == agent_module.TOOL_FAILED
@@ -212,7 +214,7 @@ def test_consecutive_error_count_resets_after_a_good_tool_call():
     ])
     agent = SchedulingAgent(model, Store.load(), max_consecutive_errors=3)
 
-    assert agent.run("hi") == "Got there in the end."
+    assert agent.run("hi").startswith("People in the directory:")
 
 
 def test_agent_calls_find_free_slots_in_range_across_several_days():
@@ -226,7 +228,9 @@ def test_agent_calls_find_free_slots_in_range_across_several_days():
 
     answer = agent.run("Find an hour for Priya and Sam sometime this week")
 
-    assert answer == "The best options are Monday at 14:00 or Tuesday at 13:00."
+    assert "2026-11-02 14:00–15:00" in answer
+    assert "2026-11-03 13:00–14:00" in answer
+    assert "limited shortlist" in answer
     result = json.loads(model.calls[1][-1]["content"])
     # Five results drawn a day at a time, so the model sees all three days
     # rather than three near-identical options from the 2nd. The three days
@@ -241,6 +245,7 @@ def test_agent_calls_find_free_slots_in_range_across_several_days():
             {"date": "2026-11-04", "start": "13:00", "end": "14:00"},
         ],
         "truncated": True,
+        "unavailable_dates": [],
     }
 
 
@@ -290,7 +295,7 @@ def test_list_people_withholds_personal_contact_details():
     model = FakeModel([tool_call("list_people"), final("Here they are.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("who works here?") == "Here they are."
+    assert agent.run("who works here?").startswith("People in the directory:")
     result = model.calls[1][-1]
     assert result["role"] == "tool"
     for secret in withheld_values():
@@ -307,7 +312,7 @@ def test_agent_feeds_get_busy_times_date_errors_back_to_the_model():
             final("Recovered."),
         ])
 
-        assert SchedulingAgent(model, Store.load()).run("when is Sam busy?") == "Recovered."
+        assert SchedulingAgent(model, Store.load()).run("when is Sam busy?") == agent_module.FALLBACK_ANSWER
         feedback = model.calls[1][-1]
         assert feedback["role"] == "tool"
         assert date in json.loads(feedback["content"])["error"], date
@@ -343,7 +348,7 @@ def test_agent_finds_a_fenced_action_after_prose():
     ])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("Find an hour on Tuesday afternoon") == "13:00 works for both."
+    assert "13:00–14:00" in agent.run("Find an hour on Tuesday afternoon")
     assert {"start": "13:00", "end": "14:00"} in json.loads(
         model.calls[1][-1]["content"]
     )
@@ -358,7 +363,7 @@ def test_agent_rejects_a_reply_with_two_fenced_blocks():
     agent = SchedulingAgent(model, Store.load())
 
     # Two candidate actions is a guess, not a parse: ask for one instead.
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     assert "error" in json.loads(model.calls[1][-1]["content"])
 
 
@@ -369,7 +374,7 @@ def test_agent_rejects_an_unfenced_object_buried_in_prose():
     ])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
     assert "error" in json.loads(model.calls[1][-1]["content"])
 
 
@@ -384,7 +389,7 @@ def test_an_empty_call_names_the_tool_and_every_argument_it_needs():
     model = FakeModel([tool_call("find_free_slots"), final("Recovered.")])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("find us a time") == "Recovered."
+    assert agent.run("find us a time") == agent_module.FALLBACK_ANSWER
     # Every required argument in signature order, so one turn is enough to
     # fix the call. The store is the agent's to pass and earliest/latest
     # have defaults, so neither is anything for the model to supply.
@@ -401,7 +406,7 @@ def test_one_error_names_both_the_missing_and_the_unexpected_arguments():
     ])
     agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("when is Sam busy?") == "Recovered."
+    assert agent.run("when is Sam busy?") == agent_module.FALLBACK_ANSWER
     # Both faults in one message: fixing either alone would only earn the
     # same error back with the other half of it.
     assert argument_error(model) == (
@@ -471,7 +476,7 @@ def test_a_model_that_fixes_what_the_error_names_recovers_in_one_turn():
         model = AdaptiveModel(tool, args)
         agent = SchedulingAgent(model, Store.load())
 
-        assert agent.run("find us a time") == "Found it.", tool
+        assert agent.run("find us a time").startswith("Verified availability for"), tool
         assert model.errors == 1, tool
 
 
@@ -486,5 +491,151 @@ def test_agent_survives_a_tool_with_no_readable_signature(monkeypatch):
     answer = agent.run("who works here?")
 
     assert isinstance(answer, str)
-    assert answer == "Recovered."
+    assert answer == agent_module.FALLBACK_ANSWER
     assert argument_error(model) == agent_module.TOOL_FAILED
+
+# --- Adversarial end-to-end tests for the assignment's trust boundary ---
+
+
+def test_final_without_a_verified_tool_cannot_invent_a_meeting():
+    model = FakeModel([final("Alice and Priya are free from 09:30 to 10:30")])
+    answer = SchedulingAgent(model, Store.load()).run("Find time with Alice")
+    assert answer == agent_module.FALLBACK_ANSWER
+    assert "09:30" not in answer and "are free" not in answer
+
+
+def test_final_cannot_override_verified_windows_or_people():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya", "sam"],
+                  date="2026-11-03", duration_minutes=60, earliest="12:00"),
+        final("Alice, Priya and Sam are available 09:30–10:30"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find an hour with Priya and Sam")
+    assert "Priya Raman" in answer and "Sam Okafor" in answer
+    assert "13:00–14:00" in answer
+    assert "16:00–17:00" in answer
+    assert "Alice" not in answer
+    assert "09:30" not in answer
+
+
+def test_unknown_person_error_cannot_be_overridden_by_later_success():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya", "alice"],
+                  date="2026-11-03", duration_minutes=60),
+        tool_call("find_free_slots", attendees=["priya"],
+                  date="2026-11-03", duration_minutes=60),
+        final("Alice and Priya can meet at 13:00"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find time for Alice and Priya")
+    assert "alice" in answer and "couldn't find" in answer
+    assert "13:00" not in answer and "available" not in answer
+
+
+def test_unknown_person_with_bad_argument_types_never_crashes():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=[{"name": "priya"}],
+                  date="2026-11-03", duration_minutes=60),
+        final("They are all free"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find time")
+    assert "couldn't find" in answer
+    assert "all free" not in answer
+
+
+def test_duration_rounding_is_visible_in_answer():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["luis"],
+                  date="2026-11-02", duration_minutes=45, earliest="16:00"),
+        final("45-minute meeting at 16:30"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find 45 minutes with Luis")
+    assert "45-minute meeting" in answer
+    assert "reserving 60 minutes" in answer
+    assert "16:00–17:00" in answer
+    assert "16:30" not in answer
+
+
+def test_range_response_exposes_uncovered_days_and_truncation():
+    model = FakeModel([
+        tool_call("find_free_slots_in_range", attendees=["luis"],
+                  start_date="2026-11-02", end_date="2026-11-06",
+                  duration_minutes=30),
+        final("Everyone is free on Friday November 6"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Find time with Luis this week")
+    assert "2026-11-02" in answer
+    assert "2026-11-05" in answer and "2026-11-06" in answer
+    assert "availability on those dates is unknown" in answer
+    assert "limited shortlist" in answer
+    assert "Everyone is free" not in answer
+
+
+def test_final_tool_mix_is_rejected_and_can_be_repaired():
+    mixed = json.dumps({"tool": "list_people", "args": {}, "final": "Alice is free"})
+    model = FakeModel([mixed, tool_call("list_people"), final("Alice is free")])
+    answer = SchedulingAgent(model, Store.load()).run("Who works here?")
+    assert answer.startswith("People in the directory")
+    assert "Alice" not in answer
+    assert "exactly one action" in argument_error(model)
+
+
+def test_tool_actions_with_unexpected_fields_are_rejected():
+    model = FakeModel([
+        json.dumps({"tool": "list_people", "args": {}, "debug": True}),
+        tool_call("list_people"),
+        final("Here are fake people"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("list people")
+    assert answer.startswith("People in the directory")
+    assert "fake people" not in answer
+    assert "exactly" in argument_error(model)
+
+
+def test_busy_times_answer_is_from_a_tool_not_the_llm():
+    model = FakeModel([
+        tool_call("get_busy_times", person="sam", date="2026-11-04"),
+        final("Sam is busy 10:00–17:00 and Dana is busy all day"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("When is Sam busy on Wednesday?")
+    assert "Sam Okafor" in answer and "09:00–09:30" in answer
+    assert "10:00–17:00" not in answer and "Dana" not in answer
+
+
+def test_no_windows_does_not_claim_other_days_are_busy():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya"],
+                  date="2026-11-02", duration_minutes=480),
+        final("Priya is unavailable all week"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Eight hours with Priya Monday")
+    assert "no available windows found" in answer
+    assert "all week" not in answer
+
+
+def test_agent_fails_closed_on_unrecognized_tool_result(monkeypatch):
+    monkeypatch.setitem(agent_module.TOOLS, "list_people", lambda store: {"not": "a directory"})
+    model = FakeModel([tool_call("list_people"), final("Alice is free")])
+    assert SchedulingAgent(model, Store.load()).run("Who works here?") == agent_module.FALLBACK_ANSWER
+
+
+def test_failed_followup_cannot_reuse_previous_availability():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya"],
+                  date="2026-11-02", duration_minutes=30),
+        tool_call("find_free_slots", attendees=["priya"],
+                  date="2026-11-02", duration_minutes=30, earliest="not a time"),
+        final("09:00 is verified"),
+    ])
+    assert SchedulingAgent(model, Store.load()).run("Find Priya after midnight") == agent_module.FALLBACK_ANSWER
+
+
+def test_uncovered_day_gets_a_specific_safe_answer():
+    model = FakeModel([
+        tool_call("find_free_slots", attendees=["priya"],
+                  date="2026-11-05", duration_minutes=30),
+        final("Thursday is wide open"),
+    ])
+    answer = SchedulingAgent(model, Store.load()).run("Meet Priya Thursday")
+    assert "can't confirm availability" in answer
+    assert "2026-11-05" in answer
+    assert "wide open" not in answer

@@ -38,8 +38,18 @@ python main.py "Find an hour for Priya and Sam on Tuesday afternoon"
 ```
 
 Sample calendar data covers Monday 2 November to Wednesday 4 November 2026.
-"Today" is Monday 2 November 2026. A search over a range may run past that
-window; days with no data in `calendars.json` simply come back wide open.
+"Today" is Monday 2 November 2026. This is a **sparse busy-only export**:
+within those dates, missing person entries mean no recorded conflicts. Dates
+absent from every calendar are **unknown**, never assumed free. A single-day
+search rejects unsupported dates; a range search lists them separately under
+`unavailable_dates` and only returns verified windows for covered dates.
+
+The agent treats a model's `final` response as a completion signal, not as a
+source of scheduling facts. User-facing times are rendered deterministically
+from a successful tool result. If there is no verified result, it safely
+asks for clarification rather than repeating an invented model answer.
+A 45-minute request reserves a 60-minute window on the 30-minute grid, and
+this is explained in the response.
 
 ## Models
 

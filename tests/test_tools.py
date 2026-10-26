@@ -222,6 +222,9 @@ def test_find_free_slots_in_range_agrees_with_the_single_day_tool_across_days():
 
 def test_find_free_slots_in_range_skips_saturday_and_sunday():
     store = Store.load()
+    # Synthetic explicit coverage makes these otherwise absent dates known.
+    store.calendars["luis"]["2026-11-06"] = []
+    store.calendars["luis"]["2026-11-09"] = []
     results = find_free_slots_in_range(
         store, attendees=["luis"], start_date="2026-11-06",
         end_date="2026-11-09", duration_minutes=30, earliest="16:00",
@@ -253,6 +256,7 @@ def test_find_free_slots_in_range_rejects_a_range_with_no_weekdays():
 
 def test_find_free_slots_in_range_accepts_a_weekend_start_or_end():
     store = Store.load()
+    store.calendars["luis"]["2026-11-09"] = []  # synthetic known day
     # Unlike find_free_slots, the bounds of a range may fall on a weekend:
     # only the days searched have to be weekdays.
     results = find_free_slots_in_range(
@@ -478,3 +482,43 @@ def test_find_free_slots_rejects_malformed_or_out_of_range_times():
                 store, attendees=["luis"], date="2026-11-02",
                 duration_minutes=30, earliest=clock,
             )
+
+
+def test_missing_calendar_data_is_not_reported_as_free():
+    store = Store.load()
+    for date in ["2026-11-05", "2026-11-06"]:
+        with pytest.raises(ToolError, match="No calendar data is available"):
+            find_free_slots(store, attendees=["priya", "sam"],
+                            date=date, duration_minutes=30)
+        with pytest.raises(ToolError, match="No calendar data is available"):
+            get_busy_times(store, "sam", date)
+
+
+def test_range_safely_reports_partial_calendar_coverage():
+    results = find_free_slots_in_range(
+        Store.load(), attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-06", duration_minutes=30, max_results=20,
+    )
+    assert results["unavailable_dates"] == ["2026-11-05", "2026-11-06"]
+    assert results["slots"]
+    assert {slot["date"] for slot in results["slots"]} <= {
+        "2026-11-02", "2026-11-03", "2026-11-04"
+    }
+
+
+def test_range_with_no_coverage_raises_instead_of_lying():
+    with pytest.raises(ToolError, match="No calendar data is available"):
+        find_free_slots_in_range(
+            Store.load(), attendees=["priya"], start_date="2026-11-05",
+            end_date="2026-11-06", duration_minutes=30,
+        )
+
+
+def test_absent_person_day_within_global_coverage_is_free():
+    # The export is sparse: Luis has no *busy entry* on the second, but the
+    # date is present in the other calendars, so we know the date is covered.
+    slots = find_free_slots(
+        Store.load(), attendees=["luis"], date="2026-11-02",
+        duration_minutes=30,
+    )
+    assert len(slots) == 16

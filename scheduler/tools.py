@@ -2,7 +2,6 @@
 and returns JSON-serialisable data."""
 
 import datetime
-import math
 import re
 from itertools import zip_longest
 
@@ -88,6 +87,17 @@ def _check_date(value) -> None:
         )
 
 
+def _check_coverage(store: Store, date: str) -> None:
+    """Do not confuse a missing day with an explicitly empty calendar."""
+    if date not in store.covered_dates:
+        dates = sorted(store.covered_dates)
+        known = ", ".join(dates) if dates else "none"
+        raise ToolError(
+            f"No calendar data is available for {date}. "
+            f"Dates with data: {known}. Cannot confirm availability."
+        )
+
+
 def _check_duration(duration_minutes) -> None:
     if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
         raise ToolError(
@@ -162,6 +172,7 @@ def get_busy_times(store: Store, person: str, date: str) -> list[dict]:
     """
     _check_person(store, person)
     _check_date(date)
+    _check_coverage(store, date)
     busy = store.calendars.get(person, {}).get(date, [])
     return [{"start": block["start"], "end": block["end"]} for block in busy]
 
@@ -182,6 +193,7 @@ def find_free_slots(
     """
     _check_attendees(store, attendees)
     _check_date(date)
+    _check_coverage(store, date)
     _check_duration(duration_minutes)
     _check_bounds(earliest, latest)
 
@@ -191,7 +203,7 @@ def find_free_slots(
         calendars.append(availability_from_busy(busy))
 
     free = combine_availability(calendars)
-    slots_needed = math.ceil(duration_minutes / SLOT_MINUTES)
+    slots_needed = (duration_minutes + SLOT_MINUTES - 1) // SLOT_MINUTES
     start_slot = _bound_to_slot(earliest, time_to_slot_ceil) if earliest else 0
     end_slot = _bound_to_slot(latest, time_to_slot) if latest else SLOTS_PER_DAY
 
@@ -225,6 +237,10 @@ def find_free_slots_in_range(
     the range held more free windows than were returned, so a caller can
     tell a complete answer from a sample of one: without it, five slots
     from a fortnight look exactly like a fortnight with only five.
+
+    Days outside the sample export are excluded and listed in
+    `unavailable_dates`, not treated as empty calendars. A search where
+    every weekday is unsupported raises a ToolError.
 
     Results are spread across the days of the range: the earliest window of
     each day first, then each day's second, and so on until `max_results`
@@ -264,10 +280,15 @@ def find_free_slots_in_range(
     # Search each weekday whole first. Days ascend and find_free_slots
     # returns each day's windows in time order.
     per_day: list[list[dict]] = []
+    unavailable_dates: list[str] = []
     day = start
     while day <= end:
         if day.weekday() < 5:
             date = day.isoformat()
+            if date not in store.covered_dates:
+                unavailable_dates.append(date)
+                day += datetime.timedelta(days=1)
+                continue
             per_day.append([
                 {"date": date, **slot}
                 for slot in find_free_slots(
@@ -275,6 +296,12 @@ def find_free_slots_in_range(
                 )
             ])
         day += datetime.timedelta(days=1)
+
+    if not per_day:
+        raise ToolError(
+            f"No calendar data is available for weekdays from "
+            f"{start_date} to {end_date}; cannot confirm availability."
+        )
 
     # Then take every day's first window before any day's second, so a
     # wide-open Monday cannot fill a short list on its own and hide the
@@ -293,7 +320,11 @@ def find_free_slots_in_range(
     )
     # `interleaved` holds every free window in the range, so anything it
     # has over `slots` is what the limit cut.
-    return {"slots": slots, "truncated": len(interleaved) > len(slots)}
+    return {
+        "slots": slots,
+        "truncated": len(interleaved) > len(slots),
+        "unavailable_dates": unavailable_dates,
+    }
 
 
 TOOLS = {

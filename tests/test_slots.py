@@ -33,3 +33,14 @@ def test_combine_availability():
 def test_find_free_windows():
     free = [False, True, True, True, False, True] + [False] * 10
     assert find_free_windows(free, 2) == [1, 2]
+
+
+def test_bad_busy_blocks_fail_closed_instead_of_leaving_day_free():
+    import pytest
+
+    for block in [
+        {"start": "10:00", "end": "09:30"},
+        {"start": "10:00", "end": "10:00"},
+    ]:
+        with pytest.raises(ValueError, match="start before end"):
+            availability_from_busy([block])

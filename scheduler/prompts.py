@@ -30,10 +30,13 @@ You can call these tools:
 - find_free_slots_in_range(attendees, start_date, end_date, duration_minutes,
   earliest, latest, max_results): the same search across every weekday from
   `start_date` to `end_date` inclusive, earliest day first. It returns
-  {{"slots": [...], "truncated": true/false}}: each slot carries the `date` it
-  falls on, and `truncated` is true when the range held more free times than
-  were returned. Weekends are skipped, a range with no weekday in it is
-  rejected as an error rather than coming back empty, the range may cover at
+  {{"slots": [...], "truncated": true/false, "unavailable_dates": [...]}}:
+  each slot carries the `date` it
+  falls on, `truncated` marks additional valid windows, and
+  `unavailable_dates` lists weekdays without calendar coverage (unknown,
+  NOT free or busy). A date absent for everyone in the sample cannot be
+  searched as a standalone day. Weekends are skipped; a range with no
+  weekday in it is rejected as an error rather than coming back empty, the range may cover at
   most {MAX_RANGE_DAYS} days, and `max_results` (default 5, capped at
   {MAX_RESULTS_CAP}) limits how many slots come back. Those results are
   spread across the days of the range - the earliest time on each day, then
@@ -47,6 +50,11 @@ You can call these tools:
   `max_results` helps too, but only as far as {MAX_RESULTS_CAP}. Prefer
   this over calling find_free_slots once per day when the user asks about a
   week or says "some time next week".
+
+Your final text is only a completion signal. The application will render
+verified results from successful tools, not repeat your unverified claims.
+Use a scheduling tool before finishing any availability question. If a tool
+rejects an unknown person, do not invent their availability.
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}

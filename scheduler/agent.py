@@ -6,6 +6,7 @@ import re
 
 from .model import Model
 from .prompts import build_system_prompt
+from .responses import format_verified_result
 from .store import Store
 from .tools import TOOLS, ToolError
 
@@ -106,12 +107,18 @@ def parse_action(raw: str) -> tuple[dict | None, str | None]:
         return None, (
             f"Your reply must be a JSON object, not a {type(action).__name__}."
         )
+    if "final" in action and "tool" in action:
+        return None, 'Specify exactly one action: "final" or "tool", not both.'
     if "final" in action:
+        if set(action) != {"final"}:
+            return None, 'A "final" action may not contain extra fields.'
         if not isinstance(action["final"], str):
             return None, '"final" must be a string.'
         return action, None
     if "tool" not in action:
         return None, 'Your reply must contain either "final" or "tool".'
+    if set(action) != {"tool", "args"}:
+        return None, 'A tool action must have exactly "tool" and "args".'
 
     tool = action["tool"]
     if not isinstance(tool, str) or tool not in TOOLS:
@@ -172,46 +179,93 @@ class SchedulingAgent:
             return None, TOOL_FAILED
 
     def run(self, user_request: str) -> str:
-        """Handle one user request and return the assistant's final answer.
+        """Turn tool calls into verified answers, never trusting free-form claims.
 
-        A malformed reply or a failing tool call is never raised at the caller:
-        it is described back to the model as a tool result so that the next
-        turn can correct it. If the model runs past `max_steps` turns, or gets
-        `max_consecutive_errors` replies wrong in a row, give up and say so
-        rather than looping forever. If the model call itself fails, give up
-        immediately with the same answer.
+        Only a successful, recognized tool result may produce factual output.
+        The LLM's `final` text is just the completion signal: returning it
+        verbatim could invent employees or time windows. An unknown person
+        observed in a rejected tool call blocks recommendations for this run.
         """
         messages = [
-            {"role": "system", "content": build_system_prompt(self.store.people, self.today)},
+            {
+                "role": "system",
+                "content": build_system_prompt(self.store.people, self.today),
+            },
             {"role": "user", "content": user_request},
         ]
-
+        last_verified: tuple[str, dict, object] | None = None
+        unknown_people: set[str] = set()
+        coverage_error: str | None = None
+        known_ids = {p["id"] for p in self.store.people}
         consecutive_errors = 0
+
+        def safe_failure() -> str:
+            if unknown_people:
+                unknown = ", ".join(sorted(unknown_people))
+                return (
+                    f"I couldn't find these people in the directory: {unknown}. "
+                    "Please check the names; no meeting time has been suggested."
+                )
+            if coverage_error:
+                return f"I can't confirm availability: {coverage_error}"
+            return FALLBACK_ANSWER
+
         for _ in range(self.max_steps):
             try:
                 raw = self.model.complete(messages)
             except Exception:
-                # The endpoint is down, timing out or rejecting us. Retrying
-                # would most likely fail the same way, so say so at once
-                # rather than burning the remaining steps on it.
-                return FALLBACK_ANSWER
+                return safe_failure()
             messages.append({"role": "assistant", "content": raw})
 
             action, error = parse_action(raw)
             if error is None:
                 if "final" in action:
-                    return action["final"]
-                content, error = self._call_tool(
-                    action["tool"], action["args"]
-                )
+                    if unknown_people or coverage_error:
+                        return safe_failure()
+                    if last_verified is None:
+                        return safe_failure()
+                    name, args, result = last_verified
+                    # This renderer ignores the model's untrusted prose.
+                    try:
+                        return (
+                            format_verified_result(self.store, name, args, result)
+                            or FALLBACK_ANSWER
+                        )
+                    except (TypeError, ValueError, KeyError):
+                        # Even an unexpected tool shape must fail closed.
+                        return FALLBACK_ANSWER
+
+                name, args = action["tool"], action["args"]
+                content, error = self._call_tool(name, args)
                 if error is None:
                     consecutive_errors = 0
+                    # `_call_tool` already JSON-serializes the result; if it
+                    # can be serialized but does not match the expected shape,
+                    # the formatter safely falls back rather than repeating it.
+                    last_verified = (name, args, json.loads(content))
+                    if name in {"find_free_slots", "find_free_slots_in_range", "get_busy_times"}:
+                        coverage_error = None
                     messages.append({"role": "tool", "content": content})
                     continue
+
+                # An invalid follow-up lookup must not silently reuse a
+                # previous window that did not include its new constraints.
+                last_verified = None
+                if error.startswith("No calendar data is available"):
+                    coverage_error = error
+                if (error.startswith("Unknown attendee ids:")
+                        and isinstance(args.get("attendees"), list)):
+                    unknown_people.update(
+                        repr(person)[:80] if not isinstance(person, str) else person
+                        for person in args["attendees"]
+                        if not isinstance(person, str) or person not in known_ids
+                    )
+                if error.startswith("Unknown person") and name == "get_busy_times":
+                    unknown_people.add(str(args.get("person")))
 
             messages.append({"role": "tool", "content": json.dumps({"error": error})})
             consecutive_errors += 1
             if consecutive_errors >= self.max_consecutive_errors:
-                return FALLBACK_ANSWER
+                return safe_failure()
 
-        return FALLBACK_ANSWER
+        return safe_failure()
