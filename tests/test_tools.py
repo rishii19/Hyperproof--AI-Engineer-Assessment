@@ -365,3 +365,29 @@ def test_get_busy_times_rejects_weekends_and_unparsable_dates():
         with pytest.raises(ToolError) as excinfo:
             get_busy_times(store, "sam", date)
         assert date in str(excinfo.value)
+
+
+def test_find_free_slots_accepts_a_single_digit_hour():
+    store = Store.load()
+    slots = find_free_slots(
+        store, attendees=["luis"], date="2026-11-02", duration_minutes=30,
+        earliest="9:00", latest="10:00",
+    )
+    assert slots == [
+        {"start": "09:00", "end": "09:30"},
+        {"start": "09:30", "end": "10:00"},
+    ]
+    assert slots == find_free_slots(
+        store, attendees=["luis"], date="2026-11-02", duration_minutes=30,
+        earliest="09:00", latest="10:00",
+    )
+
+
+def test_find_free_slots_rejects_malformed_or_out_of_range_times():
+    store = Store.load()
+    for clock in ["24:00", "9:60", "9am", "09:00:00", "09:00\n", "", "9", ":30"]:
+        with pytest.raises(ToolError):
+            find_free_slots(
+                store, attendees=["luis"], date="2026-11-02",
+                duration_minutes=30, earliest=clock,
+            )

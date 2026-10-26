@@ -21,7 +21,10 @@ from .store import Store, directory_entry
 MAX_DURATION_MINUTES = 480  # one full working day
 MAX_RANGE_DAYS = 14  # a date range may span at most a fortnight
 MAX_RESULTS_CAP = 20  # a range search never returns more than this
-CLOCK_PATTERN = re.compile(r"^([01][0-9]|2[0-3]):[0-5][0-9]$")
+# A 24-hour clock time. The hour may be given with or without its
+# leading zero ("9:00" as well as "09:00"), but nothing else is
+# accepted: the whole string must be the time and nothing more.
+CLOCK_PATTERN = re.compile(r"\A([01]?[0-9]|2[0-3]):[0-5][0-9]\Z")
 DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
@@ -104,7 +107,8 @@ def _check_bounds(earliest, latest) -> None:
             continue
         if not isinstance(clock, str) or not CLOCK_PATTERN.match(clock):
             raise ToolError(
-                f"{label} must be a time in HH:MM form, got {clock!r}"
+                f"{label} must be a 24-hour time such as 09:00 or 9:00, "
+                f"got {clock!r}"
             )
     if earliest and latest and time_to_minutes(earliest) >= time_to_minutes(latest):
         raise ToolError(
