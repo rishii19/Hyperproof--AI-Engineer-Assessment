@@ -16,7 +16,7 @@ from .slots import (
     time_to_slot,
     time_to_slot_ceil,
 )
-from .store import Store
+from .store import Store, directory_entry
 
 MAX_DURATION_MINUTES = 480  # one full working day
 MAX_RANGE_DAYS = 14  # a date range may span at most a fortnight
@@ -139,8 +139,13 @@ def _bound_to_slot(clock: str, convert) -> int:
 
 
 def list_people(store: Store) -> list[dict]:
-    """Return everyone in the directory."""
-    return store.people
+    """Return everyone in the directory.
+
+    Each person is trimmed to the directory fields, for the same reason
+    the system prompt is: contact details and reporting lines are not
+    needed to find a meeting time, so the model never sees them.
+    """
+    return [directory_entry(person) for person in store.people]
 
 
 def get_busy_times(store: Store, person: str, date: str) -> list[dict]:

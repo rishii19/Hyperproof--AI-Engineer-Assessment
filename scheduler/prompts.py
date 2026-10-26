@@ -2,17 +2,12 @@
 
 import json
 
-
-DIRECTORY_FIELDS = ("id", "name", "title")
+from .store import directory_entry
 
 
 def build_system_prompt(people: list[dict], today: str) -> str:
-    # Only the fields the model needs to pick the right person. Email, phone,
-    # home city and reporting lines are not its business.
-    directory = json.dumps(
-        [{field: person.get(field) for field in DIRECTORY_FIELDS} for person in people],
-        indent=2,
-    )
+    # Only the fields the model needs to pick the right person.
+    directory = json.dumps([directory_entry(person) for person in people], indent=2)
     return f"""You are a helpful scheduling assistant for Northwind Labs.
 You help employees find times when a group of colleagues can meet.
 

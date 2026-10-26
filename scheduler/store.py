@@ -6,6 +6,15 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
+# The only fields about a person that leave the store. Email, phone, home
+# city and reporting lines are not the model's business.
+DIRECTORY_FIELDS = ("id", "name", "title")
+
+
+def directory_entry(person: dict) -> dict:
+    """Trim one person to the fields the model is allowed to see."""
+    return {field: person.get(field) for field in DIRECTORY_FIELDS}
+
 
 @dataclass
 class Store:

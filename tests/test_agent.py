@@ -165,3 +165,17 @@ def test_system_prompt_documents_the_range_tool():
     SchedulingAgent(model, Store.load()).run("hi")
     system = model.calls[0][0]["content"]
     assert "find_free_slots_in_range" in system
+
+
+def test_list_people_withholds_personal_contact_details():
+    model = FakeModel([tool_call("list_people"), final("Here they are.")])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("who works here?") == "Here they are."
+    result = model.calls[1][-1]
+    assert result["role"] == "tool"
+    for secret in ["@northwind.example", "+1-415", "Oakland"]:
+        assert secret not in result["content"], secret
+    assert json.loads(result["content"])[0] == {
+        "id": "priya", "name": "Priya Raman", "title": "Engineering Manager",
+    }
