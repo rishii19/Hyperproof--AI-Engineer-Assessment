@@ -6,6 +6,22 @@ from scheduler.model import FakeModel, final, tool_call
 from scheduler.store import Store
 
 
+def withheld_values() -> list[str]:
+    """Every value in the directory the model is not allowed to see.
+
+    Built from the data rather than listed by hand, so a new person - or a
+    new contact detail on an existing one - is covered without the test
+    being updated. Manager ids are ordinary person ids, so they are checked
+    as the JSON key that would carry them.
+    """
+    secrets = []
+    for person in Store.load().people:
+        secrets += [person["email"], person["phone"], person["home_city"]]
+        if person["manager"] is not None:
+            secrets.append('"manager"')
+    return secrets
+
+
 def test_agent_returns_final_answer():
     model = FakeModel([final("Happy to help!")])
     agent = SchedulingAgent(model, Store.load())
@@ -40,8 +56,7 @@ def test_system_prompt_omits_personal_contact_details():
     model = FakeModel([final("ok")])
     SchedulingAgent(model, Store.load()).run("hi")
     system = model.calls[0][0]["content"]
-    for secret in ["priya.raman@northwind.example", "555-0142", "Oakland",
-                   "email", "phone", "home_city", "manager"]:
+    for secret in withheld_values() + ["email", "phone", "home_city"]:
         assert secret not in system, secret
 
 
@@ -190,7 +205,7 @@ def test_list_people_withholds_personal_contact_details():
     assert agent.run("who works here?") == "Here they are."
     result = model.calls[1][-1]
     assert result["role"] == "tool"
-    for secret in ["@northwind.example", "+1-415", "Oakland"]:
+    for secret in withheld_values():
         assert secret not in result["content"], secret
     assert json.loads(result["content"])[0] == {
         "id": "priya", "name": "Priya Raman", "title": "Engineering Manager",
