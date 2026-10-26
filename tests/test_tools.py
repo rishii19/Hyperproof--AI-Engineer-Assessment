@@ -71,7 +71,7 @@ def test_find_free_slots_rounds_duration_up_to_whole_slots():
 def test_find_free_slots_rejects_bad_durations():
     store = Store.load()
     for duration in [0, -30, 481, "30", 30.0, None, True]:
-        with pytest.raises(ValueError):
+        with pytest.raises(ToolError):
             find_free_slots(
                 store, attendees=["luis"], date="2026-11-02",
                 duration_minutes=duration,
@@ -113,7 +113,7 @@ def test_find_free_slots_rejects_bad_bounds():
         {"latest": "13:60"},
     ]
     for bounds in bad:
-        with pytest.raises(ValueError):
+        with pytest.raises(ToolError):
             find_free_slots(
                 store, attendees=["luis"], date="2026-11-02",
                 duration_minutes=30, **bounds,
