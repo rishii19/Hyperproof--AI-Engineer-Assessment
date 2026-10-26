@@ -184,7 +184,7 @@ def test_find_free_slots_in_range_orders_results_by_date_then_time():
     assert keys == sorted(keys)
 
 
-def test_find_free_slots_in_range_agrees_with_the_single_day_tool():
+def test_find_free_slots_in_range_agrees_with_the_single_day_tool_for_a_single_day():
     store = Store.load()
     results = find_free_slots_in_range(
         store, attendees=["priya", "sam"], start_date="2026-11-03",
@@ -196,6 +196,26 @@ def test_find_free_slots_in_range_agrees_with_the_single_day_tool():
         duration_minutes=30, earliest="13:00",
     )
     assert [{"date": "2026-11-03", **slot} for slot in single_day] == results
+
+
+def test_find_free_slots_in_range_agrees_with_the_single_day_tool_across_days():
+    store = Store.load()
+    # Whichever windows the round-robin picks, each one has to be a window
+    # find_free_slots would have offered for that same date on its own.
+    results = find_free_slots_in_range(
+        store, attendees=["priya", "sam"], start_date="2026-11-02",
+        end_date="2026-11-06", duration_minutes=60, max_results=20,
+    )
+    assert results
+    per_day = {}
+    for row in results:
+        date = row["date"]
+        if date not in per_day:
+            per_day[date] = find_free_slots(
+                store, attendees=["priya", "sam"], date=date,
+                duration_minutes=60,
+            )
+        assert {"start": row["start"], "end": row["end"]} in per_day[date]
 
 
 def test_find_free_slots_in_range_skips_saturday_and_sunday():
