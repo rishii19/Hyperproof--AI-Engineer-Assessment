@@ -224,14 +224,19 @@ def test_agent_calls_find_free_slots_in_range_across_several_days():
     assert answer == "The best options are Monday at 14:00 or Tuesday at 13:00."
     result = json.loads(model.calls[1][-1]["content"])
     # Five results drawn a day at a time, so the model sees all three days
-    # rather than three near-identical options from the 2nd.
-    assert result == [
-        {"date": "2026-11-02", "start": "14:00", "end": "15:00"},
-        {"date": "2026-11-02", "start": "15:30", "end": "16:30"},
-        {"date": "2026-11-03", "start": "13:00", "end": "14:00"},
-        {"date": "2026-11-03", "start": "16:00", "end": "17:00"},
-        {"date": "2026-11-04", "start": "13:00", "end": "14:00"},
-    ]
+    # rather than three near-identical options from the 2nd. The three days
+    # hold twelve hour-long windows between them, so the model is also told
+    # the list was cut short.
+    assert result == {
+        "slots": [
+            {"date": "2026-11-02", "start": "14:00", "end": "15:00"},
+            {"date": "2026-11-02", "start": "15:30", "end": "16:30"},
+            {"date": "2026-11-03", "start": "13:00", "end": "14:00"},
+            {"date": "2026-11-03", "start": "16:00", "end": "17:00"},
+            {"date": "2026-11-04", "start": "13:00", "end": "14:00"},
+        ],
+        "truncated": True,
+    }
 
 
 def test_system_prompt_documents_the_range_tool():

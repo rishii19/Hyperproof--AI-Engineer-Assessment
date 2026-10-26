@@ -211,7 +211,7 @@ def find_free_slots_in_range(
     earliest: str | None = None,
     latest: str | None = None,
     max_results: int = 5,
-) -> list[dict]:
+) -> dict:
     """Find times across a date range when all attendees are free.
 
     Searches every weekday from `start_date` to `end_date` inclusive -
@@ -220,6 +220,11 @@ def find_free_slots_in_range(
     each tagged with the `date` it falls on. The range itself may span at
     most 14 days, so "next week" works but "some time this year" does not.
     A range with no weekday in it at all is an error, not an empty result.
+
+    Returns {"slots": [...], "truncated": bool}. `truncated` is True when
+    the range held more free windows than were returned, so a caller can
+    tell a complete answer from a sample of one: without it, five slots
+    from a fortnight look exactly like a fortnight with only five.
 
     Results are spread across the days of the range: the earliest window of
     each day first, then each day's second, and so on until `max_results`
@@ -283,9 +288,12 @@ def find_free_slots_in_range(
     ]
     # The round-robin interleaved the days; sort to hand them back in
     # date-then-time order.
-    return sorted(
+    slots = sorted(
         interleaved[:limit], key=lambda row: (row["date"], row["start"])
     )
+    # `interleaved` holds every free window in the range, so anything it
+    # has over `slots` is what the limit cut.
+    return {"slots": slots, "truncated": len(interleaved) > len(slots)}
 
 
 TOOLS = {
