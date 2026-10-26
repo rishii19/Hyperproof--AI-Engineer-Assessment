@@ -218,6 +218,7 @@ def find_free_slots_in_range(
     one - and returns at most `max_results` slots (20 at the very most),
     each tagged with the `date` it falls on. The range itself may span at
     most 14 days, so "next week" works but "some time this year" does not.
+    A range with no weekday in it at all is an error, not an empty result.
 
     `duration_minutes`, `earliest` and `latest` mean what they do in
     `find_free_slots`, which does the per-day work.
@@ -241,6 +242,14 @@ def find_free_slots_in_range(
     _check_duration(duration_minutes)
     _check_bounds(earliest, latest)
     limit = _check_max_results(max_results)
+    if not any(
+        (start + datetime.timedelta(days=offset)).weekday() < 5
+        for offset in range(span_days)
+    ):
+        raise ToolError(
+            f"The range {start_date} to {end_date} contains no weekdays; "
+            f"weekends are not working days"
+        )
 
     # Days ascend and find_free_slots returns each day's slots in time
     # order, so the results come out sorted by date then time already.

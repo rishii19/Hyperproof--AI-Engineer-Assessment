@@ -211,13 +211,22 @@ def test_find_free_slots_in_range_skips_saturday_and_sunday():
     ]
 
 
-def test_find_free_slots_in_range_over_a_weekend_only_is_empty():
+def test_find_free_slots_in_range_rejects_a_range_with_no_weekdays():
     store = Store.load()
-    results = find_free_slots_in_range(
-        store, attendees=["luis"], start_date="2026-11-07",
-        end_date="2026-11-08", duration_minutes=30,
-    )
-    assert results == []
+    # A range of nothing but weekend searches nothing at all. Returning []
+    # reads as "everyone is busy", so name the real problem instead.
+    for start_date, end_date in [
+        ("2026-11-07", "2026-11-08"),  # Saturday to Sunday
+        ("2026-11-07", "2026-11-07"),  # a single Saturday
+    ]:
+        with pytest.raises(ToolError) as excinfo:
+            find_free_slots_in_range(
+                store, attendees=["luis"], start_date=start_date,
+                end_date=end_date, duration_minutes=30,
+            )
+        message = str(excinfo.value)
+        assert start_date in message and end_date in message
+        assert "weekend" in message.lower()
 
 
 def test_find_free_slots_in_range_accepts_a_weekend_start_or_end():
