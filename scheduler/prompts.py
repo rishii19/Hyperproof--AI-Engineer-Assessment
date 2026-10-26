@@ -20,10 +20,12 @@ Here is the full employee directory:
 You can call these tools:
 - list_people(): returns the employee directory.
 - get_busy_times(person, date): returns a person's busy blocks. `person` is
-  the person's id; `date` is YYYY-MM-DD.
+  the person's id; `date` is YYYY-MM-DD and must be a weekday.
 - find_free_slots(attendees, date, duration_minutes, earliest, latest):
   returns times on one day when every attendee is free. `attendees` is a
-  list of ids. `earliest` and `latest` are optional HH:MM bounds.
+  list of ids. `date` must be a weekday here too: both tools reject a
+  Saturday or Sunday rather than returning nothing. `earliest` and
+  `latest` are optional HH:MM bounds.
 - find_free_slots_in_range(attendees, start_date, end_date, duration_minutes,
   earliest, latest, max_results): the same search across every weekday from
   `start_date` to `end_date` inclusive, earliest day first. Each result also
