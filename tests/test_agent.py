@@ -282,6 +282,7 @@ def test_system_prompt_states_the_range_tool_contract():
     assert f"{MAX_RANGE_DAYS}" in range_section
     assert "no weekday in it is rejected as an error" in system
     assert "may never reach the later days" in system
+    assert "do not tell the user that the days or times it leaves out are busy" in system
     assert "every day that has something free" not in system
 
 
