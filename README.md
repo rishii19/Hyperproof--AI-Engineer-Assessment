@@ -1,69 +1,150 @@
-# Northwind Scheduling Assistant (Python)
+# Northwind Scheduling Assistant
 
-A small agentic assistant that helps employees find meeting times. A user
-types a request in plain English ("find 45 minutes with Priya and Sam next
-Tuesday afternoon"); a language model turns it into tool calls; the tools
-look up calendars and compute when everyone is free. A request can name one
-day or a range of them ("some time next week"), which the agent searches a
-weekday at a time.
+A Python take-home project for finding mutually available meeting times from a small employee directory and sample calendars. A tool-calling agent interprets requests, while **deterministic scheduling code** validates attendees, calculates free windows, and produces the user-facing results.
 
-This codebase was written quickly by an AI coding agent. Treat it the way you
-would treat code you inherited from a teammate: it runs, and the tests pass,
-but nobody has reviewed it carefully.
+This submission focuses on reliability: no fabricated availability, explicit handling of missing calendar data, bounded agent execution, and clear failures when a request cannot be verified. It also adds a **multi-day availability search** as the user-facing feature.
 
-## Layout
+## Quick start
 
-```
-data/                 Sample directory (people.json) and calendars (calendars.json)
-scheduler/
-  slots.py            Working-day slot model and free-window search
-  tools.py            Tools the agent can call
-  agent.py            The tool-calling loop
-  prompts.py          System prompt construction
-  model.py            Model interface + FakeModel for tests
-  real_model.py       Optional adapter for OpenAI-compatible endpoints
-  store.py            Loads the JSON data
-main.py               CLI entry point
-tests/                pytest suite
-```
+**Requirements:** Python 3.10+ and `pip`. No API key is needed to run the tests or scripted demo.
 
-## Running
+From the `northwind-scheduler-python` directory:
 
-Requires Python 3.10+.
-
-```bash
-pip install pytest
+```powershell
+python -m pip install pytest
 python -m pytest
 python main.py "Find an hour for Priya and Sam on Tuesday afternoon"
 ```
 
-Sample calendar data covers Monday 2 November to Wednesday 4 November 2026.
-"Today" is Monday 2 November 2026. This is a **sparse busy-only export**:
-within those dates, missing person entries mean no recorded conflicts. Dates
-absent from every calendar are **unknown**, never assumed free. A single-day
-search rejects unsupported dates; a range search lists them separately under
-`unavailable_dates` and only returns verified windows for covered dates.
+The default CLI uses a **scripted `FakeModel`**. It demonstrates the agent and tool flow, but does **not** interpret the text you type: without a configured real model, it always makes the same example lookup (Priya and Sam, November 3, 2026, after 12:00). To explore other attendees, dates, or durations without an LLM, use the direct-tool commands under [Manual verification](#manual-verification).
 
-The agent treats a model's `final` response as a completion signal, not as a
-source of scheduling facts. User-facing times are rendered deterministically
-from a successful tool result. If there is no verified result, it safely
-asks for clarification rather than repeating an invented model answer.
-A 45-minute request reserves a 60-minute window on the 30-minute grid, and
-this is explained in the response.
+## What it does
 
-## Models
+- **Single-day scheduling:** Computes available windows for one or more validated employees.
+- **Multi-day scheduling (added feature):** Searches an inclusive date range, skips weekends, and returns a capped shortlist across covered dates rather than favoring one busy-free day.
+- **Correct time boundaries:** Uses a 09:00–17:00 workday divided into 30-minute slots; respects `earliest` and `latest` time bounds and includes the last valid window of the day.
+- **Safe duration handling:** Rounds a requested duration *up* to a full 30-minute slot boundary (for example, 45 minutes reserves 60 minutes) and discloses that in the answer.
+- **Fail-closed validation:** Rejects unknown employee IDs, invalid dates/times/durations, missing calendar coverage, and malformed stored busy intervals instead of claiming unsupported availability.
+- **Grounded responses:** The LLM's `final` message only signals completion. Meeting times and people in the displayed response are generated from validated tool results, not copied from model prose.
+- **Agent safeguards:** Validates the action JSON and tool arguments, handles model/tool errors without crashing, and limits agent turns and consecutive errors.
+- **Data minimization:** Exposes employee IDs, names, and titles only; busy-time results exclude meeting names and details.
 
-`FakeModel` returns scripted responses, so you can test the agent without any
-API access. Script responses are raw strings, which lets you simulate
-malformed or unexpected model output as well as well-formed JSON. The helpers
-`tool_call(...)` and `final(...)` build well-formed responses.
+## Manual verification
 
-You do not need a real model for this assignment, and using one earns no extra
-credit. If you want to try one anyway, `real_model.py` works with any
-OpenAI-compatible endpoint, including a local server such as Ollama:
+The sample employees include `priya`, `sam`, `dana`, `luis`, `mei`, and `arjun`. Calendar coverage is **November 2–4, 2026**.
 
-```bash
-export LLM_BASE_URL=http://localhost:11434/v1
-export LLM_MODEL=llama3.1
+These PowerShell commands call the scheduling tools directly, so the input really changes what gets searched.
+
+**Known availability:**
+
+```powershell
+python -c "from scheduler.store import Store; from scheduler.tools import find_free_slots; print(find_free_slots(Store.load(), ['priya', 'sam'], '2026-11-03', 60, earliest='12:00'))"
+```
+
+Expected result:
+
+```python
+[{'start': '13:00', 'end': '14:00'}, {'start': '16:00', 'end': '17:00'}]
+```
+
+**Added feature — search several days:**
+
+```powershell
+python -c "from scheduler.store import Store; from scheduler.tools import find_free_slots_in_range; print(find_free_slots_in_range(Store.load(), ['priya', 'sam'], '2026-11-02', '2026-11-06', 60, earliest='12:00', max_results=5))"
+```
+
+The result contains `slots`, `truncated` (whether other valid windows were omitted), and `unavailable_dates` (covered dates are November 2–4; November 5–6 have **unknown** availability, not free calendars).
+
+**Negative case — nonexistent employee:**
+
+```powershell
+python -c "from scheduler.store import Store; from scheduler.tools import find_free_slots; print(find_free_slots(Store.load(), ['alice', 'priya'], '2026-11-03', 60))"
+```
+
+Expected: a `ToolError` identifying the unknown attendee. The command exits with an error intentionally; the agent catches this class of error and returns a safe message.
+
+**Optional interactive helper:** If you've copied `manual_check.py` beside `main.py`, you can also run `python manual_check.py` for a menu or `python manual_check.py --smoke` for targeted checks. This helper is not required by the submission or test suite.
+
+## How the agent works
+
+```text
+Employee request
+      |
+      v
+Model: JSON tool action  -->  Strict action/argument validation
+                                    |
+                                    v
+                           Scheduling tools + Store
+                           - list_people
+                           - get_busy_times
+                           - find_free_slots
+                           - find_free_slots_in_range
+                                    |
+                                    v
+                         Validated tool result
+                                    |
+                Model completion signal ("final")
+                                    |
+                                    v
+                     Deterministic response formatter
+                                    |
+                                    v
+                   Verified result or safe fallback
+```
+
+The model chooses which tool to call and supplies arguments; it does not determine whether a time is free. `scheduler/responses.py` renders supported, successful tool results. The agent refuses to turn an unverified or failed result into a meeting recommendation.
+
+## Project structure
+
+```text
+northwind-scheduler-python/
+├── main.py                 # CLI entry point / scripted demo
+├── pyproject.toml          # Python package and pytest configuration
+├── data/
+│   ├── people.json         # Sample employee directory
+│   └── calendars.json      # Sparse busy-time sample
+├── scheduler/
+│   ├── agent.py            # Bounded tool-calling loop and error handling
+│   ├── responses.py        # Deterministic, grounded user responses
+│   ├── tools.py            # Validated scheduling and lookup functions
+│   ├── slots.py            # Time-slot and free-window calculation
+│   ├── store.py            # Sample-data loading and integrity checks
+│   ├── prompts.py          # System/tool guidance
+│   ├── model.py            # Model interface and FakeModel
+│   └── real_model.py       # Optional OpenAI-compatible adapter
+├── tests/                  # pytest regression suite
+├── NOTES.md                # Investigation, fixes, AI use, and trade-offs
+└── README.md
+```
+
+## Test coverage
+
+```powershell
+python -m pytest -q
+```
+
+The verified submission has **96 passing tests**. Tests cover the final-window boundary, overlapping calendars, duration rounding, valid/invalid inputs, unknown attendees, unavailable calendar dates, multi-day result limits and distribution, corrupt calendar intervals, fabricated model answers, malformed actions, error recovery, and loop limits. Tests use `FakeModel`; no paid LLM is required.
+
+## Optional real-model mode
+
+`main.py` selects `OpenAICompatibleModel` when both `LLM_BASE_URL` and `LLM_MODEL` are set. For example, with a compatible local server already running and the model installed:
+
+```powershell
+$env:LLM_BASE_URL = "http://localhost:11434/v1"
+$env:LLM_MODEL = "llama3.1"
 python main.py "Find 30 minutes with Mei and Luis on Tuesday"
 ```
+
+**Note:** Natural-language interpretation depends on the chosen model. The application verifies calendar results for the tool arguments the model produced, but it does not independently prove that the model interpreted every condition in the original sentence correctly.
+
+## Data assumptions and boundaries
+
+- The sample dates are November **2–4, 2026**, and the agent's reference "today" is **November 2, 2026** (not your computer's current date).
+- This is a **sparse, busy-only export**: a missing employee entry on an otherwise covered date means no recorded conflict; a date missing from *all* calendars means unknown coverage, not guaranteed availability.
+- Single-day searches reject unsupported dates. Range searches report unsupported weekdays in `unavailable_dates` and do not present them as free.
+- Range searches span up to **14 calendar days**, cap returned windows at **20**, and show `truncated` when more available windows exist.
+- This project **finds times only**. It does not create calendar events, send invitations, persist bookings, or implement authentication/time zones.
+
+## Implementation notes
+
+See [`NOTES.md`](NOTES.md) for the reproduced starter defects, fixes and adjusted test expectations, the Part B feature rationale, use of AI assistance, and consciously deferred production improvements.
