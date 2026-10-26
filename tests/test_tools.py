@@ -1,7 +1,7 @@
 import pytest
 
 from scheduler.store import Store
-from scheduler.tools import find_free_slots, get_busy_times
+from scheduler.tools import ToolError, find_free_slots, get_busy_times
 
 
 def test_get_busy_times():
@@ -106,3 +106,46 @@ def test_find_free_slots_rejects_bad_bounds():
                 store, attendees=["luis"], date="2026-11-02",
                 duration_minutes=30, **bounds,
             )
+
+
+def test_unknown_attendee_error_lists_unknown_and_valid_ids():
+    store = Store.load()
+    with pytest.raises(ToolError) as excinfo:
+        find_free_slots(
+            store, attendees=["priya", "bob"], date="2026-11-02",
+            duration_minutes=30,
+        )
+    message = str(excinfo.value)
+    assert "bob" in message
+    assert "priya" in message and "luis" in message  # the valid ids
+
+
+def test_find_free_slots_rejects_bad_attendees():
+    store = Store.load()
+    for attendees in [[], "priya", None, ["priya", 7], {"id": "priya"}]:
+        with pytest.raises(ToolError):
+            find_free_slots(
+                store, attendees=attendees, date="2026-11-02",
+                duration_minutes=30,
+            )
+
+
+def test_find_free_slots_rejects_bad_dates():
+    store = Store.load()
+    for date in ["2026-11-07", "2026-11-08", "next Tuesday", "11/03/2026",
+                 "2026-13-01", None]:
+        with pytest.raises(ToolError):
+            find_free_slots(
+                store, attendees=["luis"], date=date, duration_minutes=30,
+            )
+
+
+def test_get_busy_times_rejects_unknown_person():
+    store = Store.load()
+    with pytest.raises(ToolError) as excinfo:
+        get_busy_times(store, "bob", "2026-11-02")
+    assert "bob" in str(excinfo.value)
+
+
+def test_tool_error_is_a_value_error():
+    assert issubclass(ToolError, ValueError)
