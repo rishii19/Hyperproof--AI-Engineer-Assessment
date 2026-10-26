@@ -240,18 +240,57 @@ def test_find_free_slots_in_range_accepts_a_weekend_start_or_end():
     assert [r["date"] for r in results] == ["2026-11-09", "2026-11-09"]
 
 
-def test_find_free_slots_in_range_defaults_to_five_results():
+def test_find_free_slots_in_range_spreads_its_five_results_across_days():
+    # Was test_find_free_slots_in_range_defaults_to_five_results, which
+    # expected all five from the 2nd: the results are round-robined over
+    # the days now, so a free Monday no longer fills the whole list.
     store = Store.load()
     results = find_free_slots_in_range(
         store, attendees=["luis"], start_date="2026-11-02",
-        end_date="2026-11-04", duration_minutes=30,
+        end_date="2026-11-06", duration_minutes=30,
     )
+    # Five weekdays, five results: the earliest window of each day.
     assert results == [
         {"date": "2026-11-02", "start": "09:00", "end": "09:30"},
-        {"date": "2026-11-02", "start": "09:30", "end": "10:00"},
-        {"date": "2026-11-02", "start": "10:00", "end": "10:30"},
-        {"date": "2026-11-02", "start": "10:30", "end": "11:00"},
-        {"date": "2026-11-02", "start": "11:00", "end": "11:30"},
+        {"date": "2026-11-03", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-04", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-05", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-06", "start": "09:00", "end": "09:30"},
+    ]
+
+
+def test_find_free_slots_in_range_returns_everything_under_max_results():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-03", duration_minutes=30, earliest="15:00",
+        max_results=10,
+    )
+    # Six windows in all, so nothing is dropped and date-then-time order
+    # survives the round-robin.
+    assert results == [
+        {"date": "2026-11-02", "start": "15:00", "end": "15:30"},
+        {"date": "2026-11-02", "start": "15:30", "end": "16:00"},
+        {"date": "2026-11-02", "start": "16:00", "end": "16:30"},
+        {"date": "2026-11-02", "start": "16:30", "end": "17:00"},
+        {"date": "2026-11-03", "start": "15:00", "end": "15:30"},
+        {"date": "2026-11-03", "start": "15:30", "end": "16:00"},
+    ]
+
+
+def test_find_free_slots_in_range_skips_an_empty_day_without_spending_the_cap():
+    store = Store.load()
+    # Luis is in user interviews 16:00-17:00 on the 3rd, so that day offers
+    # nothing after 16:00. Its turn passes to the next day with free time
+    # rather than costing one of the two results.
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-04", duration_minutes=30, earliest="16:00",
+        max_results=2,
+    )
+    assert results == [
+        {"date": "2026-11-02", "start": "16:00", "end": "16:30"},
+        {"date": "2026-11-04", "start": "16:00", "end": "16:30"},
     ]
 
 
@@ -270,10 +309,12 @@ def test_find_free_slots_in_range_caps_max_results_at_twenty():
         store, attendees=["luis"], start_date="2026-11-02",
         end_date="2026-11-04", duration_minutes=30, max_results=500,
     )
-    # The 2nd alone offers 16 slots and the 3rd another 11, so the cap -
-    # not the calendar - is what stops the search.
+    # The three days offer 43 slots between them, so the cap - not the
+    # calendar - is what stops the search, and every day is represented.
     assert len(results) == 20
-    assert {r["date"] for r in results} == {"2026-11-02", "2026-11-03"}
+    assert {r["date"] for r in results} == {
+        "2026-11-02", "2026-11-03", "2026-11-04",
+    }
 
 
 def test_find_free_slots_in_range_rejects_bad_max_results():

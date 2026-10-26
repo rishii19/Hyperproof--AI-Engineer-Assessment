@@ -4,6 +4,7 @@ and returns JSON-serialisable data."""
 import datetime
 import math
 import re
+from itertools import zip_longest
 
 from .slots import (
     SLOT_MINUTES,
@@ -220,6 +221,10 @@ def find_free_slots_in_range(
     most 14 days, so "next week" works but "some time this year" does not.
     A range with no weekday in it at all is an error, not an empty result.
 
+    Results are spread across the days of the range: the earliest window of
+    each day first, then each day's second, and so on until `max_results`
+    is reached, so one wide-open day cannot crowd out the rest of the week.
+
     `duration_minutes`, `earliest` and `latest` mean what they do in
     `find_free_slots`, which does the per-day work.
     """
@@ -251,21 +256,36 @@ def find_free_slots_in_range(
             f"weekends are not working days"
         )
 
-    # Days ascend and find_free_slots returns each day's slots in time
-    # order, so the results come out sorted by date then time already.
-    results: list[dict] = []
+    # Search each weekday whole first. Days ascend and find_free_slots
+    # returns each day's windows in time order.
+    per_day: list[list[dict]] = []
     day = start
-    while day <= end and len(results) < limit:
+    while day <= end:
         if day.weekday() < 5:
             date = day.isoformat()
-            for slot in find_free_slots(
-                store, attendees, date, duration_minutes, earliest, latest
-            ):
-                results.append({"date": date, **slot})
-                if len(results) >= limit:
-                    break
+            per_day.append([
+                {"date": date, **slot}
+                for slot in find_free_slots(
+                    store, attendees, date, duration_minutes, earliest, latest
+                )
+            ])
         day += datetime.timedelta(days=1)
-    return results
+
+    # Then take every day's first window before any day's second, so a
+    # wide-open Monday cannot fill a short list on its own and hide the
+    # rest of the week. A day with nothing free pads with None here, so it
+    # drops out without spending any of the limit.
+    interleaved = [
+        window
+        for same_rank in zip_longest(*per_day)
+        for window in same_rank
+        if window is not None
+    ]
+    # The round-robin interleaved the days; sort to hand them back in
+    # date-then-time order.
+    return sorted(
+        interleaved[:limit], key=lambda row: (row["date"], row["start"])
+    )
 
 
 TOOLS = {

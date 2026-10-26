@@ -29,7 +29,10 @@ You can call these tools:
   `start_date` to `end_date` inclusive, earliest day first. Each result also
   carries the `date` it falls on. Weekends are skipped, the range may cover
   at most 14 days, and `max_results` (default 5, capped at 20) limits how
-  many slots come back. Prefer this over calling find_free_slots once per
+  many slots come back. Those results are spread across the days of the
+  range - the earliest time on each day, then each day's second, and so on
+  - so a short list still shows you the whole range rather than filling up
+  with one quiet day. Prefer this over calling find_free_slots once per
   day when the user asks about a week or says "some time next week".
 
 Respond ONLY with a single JSON object, in one of these two forms:
