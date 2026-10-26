@@ -1,5 +1,6 @@
 """The scheduling agent: a simple tool-calling loop."""
 
+import inspect
 import json
 import re
 
@@ -11,6 +12,12 @@ from .tools import TOOLS, ToolError
 FALLBACK_ANSWER = (
     "Sorry - I wasn't able to work that out. Could you try rephrasing your "
     "request, with the people and the date you have in mind?"
+)
+
+TOOL_FAILED = (
+    "That tool failed while it ran. Its arguments were fine, so this is a "
+    "fault in the tool rather than in the call: try another way of getting "
+    "what you need, or answer without it."
 )
 
 FENCE_PATTERN = re.compile(r"```(?:json)?[ \t]*\r?\n?(.*?)```", re.DOTALL)
@@ -86,6 +93,29 @@ class SchedulingAgent:
         self.max_steps = max_steps
         self.max_consecutive_errors = max_consecutive_errors
 
+    def _call_tool(self, name: str, args: dict) -> tuple[str | None, str | None]:
+        """Run one tool call, returning `(json_result, None)` or `(None, error)`.
+
+        Binding the arguments first keeps the two kinds of failure apart. A
+        call the model got wrong is described back to it in the binder's own
+        words, so the next turn can fix the argument. Anything the tool then
+        raises - a bug in it, or a result that will not serialise - is the
+        model's to work around rather than to correct, so it comes back as
+        one generic failure with no internals quoted at it.
+        """
+        tool = TOOLS[name]
+        try:
+            inspect.signature(tool).bind(self.store, **args)
+        except TypeError as exc:
+            return None, str(exc)
+
+        try:
+            return json.dumps(tool(self.store, **args)), None
+        except ToolError as exc:
+            return None, str(exc)
+        except Exception:  # a tool bug must not kill the loop
+            return None, TOOL_FAILED
+
     def run(self, user_request: str) -> str:
         """Handle one user request and return the assistant's final answer.
 
@@ -116,17 +146,10 @@ class SchedulingAgent:
             if error is None:
                 if "final" in action:
                     return action["final"]
-                try:
-                    result = TOOLS[action["tool"]](self.store, **action["args"])
-                    # Serialising here, inside the try, means a result the
-                    # tool cannot hand back as JSON is reported like any
-                    # other tool failure instead of escaping the loop.
-                    content = json.dumps(result)
-                except (TypeError, ToolError) as exc:
-                    error = str(exc)
-                except Exception as exc:  # a tool bug must not kill the loop
-                    error = f"{type(exc).__name__}: {exc}"
-                else:
+                content, error = self._call_tool(
+                    action["tool"], action["args"]
+                )
+                if error is None:
                     consecutive_errors = 0
                     messages.append({"role": "tool", "content": content})
                     continue

@@ -1,9 +1,12 @@
 import json
 
+import pytest
+
 from scheduler import agent as agent_module
 from scheduler.agent import SchedulingAgent
 from scheduler.model import FakeModel, final, tool_call
 from scheduler.store import Store
+from scheduler.tools import ToolError, find_free_slots
 
 
 def withheld_values() -> list[str]:
@@ -99,18 +102,36 @@ def test_agent_feeds_tool_errors_back_to_the_model():
                   duration_minutes=30),
         final("Recovered."),
     ])
-    agent = SchedulingAgent(model, Store.load())
+    store = Store.load()
+    agent = SchedulingAgent(model, store)
 
     assert agent.run("hi") == "Recovered."
-    assert "bob" in json.loads(model.calls[1][-1]["content"])["error"]
+    # A ToolError is written for the model, so it reaches it word for word
+    # rather than being flattened into the generic failure.
+    with pytest.raises(ToolError) as excinfo:
+        find_free_slots(store, attendees=["bob"], date="2026-11-02",
+                        duration_minutes=30)
+    error = json.loads(model.calls[1][-1]["content"])["error"]
+    assert error == str(excinfo.value)
+    assert "bob" in error
 
 
 def test_agent_feeds_bad_tool_arguments_back_to_the_model():
-    model = FakeModel([tool_call("list_people", when="now"), final("Recovered.")])
-    agent = SchedulingAgent(model, Store.load())
+    # Arguments are bound before the call, so a bad call list is named for
+    # what it is - something the next turn can fix - and never mistaken for
+    # the tool falling over.
+    bad_calls = [
+        (tool_call("list_people", when="now"), "when"),
+        (tool_call("get_busy_times", person="sam"), "date"),
+    ]
+    for raw, argument in bad_calls:
+        model = FakeModel([raw, final("Recovered.")])
+        agent = SchedulingAgent(model, Store.load())
 
-    assert agent.run("hi") == "Recovered."
-    assert "error" in json.loads(model.calls[1][-1]["content"])
+        assert agent.run("hi") == "Recovered."
+        error = json.loads(model.calls[1][-1]["content"])["error"]
+        assert f"'{argument}'" in error, raw
+        assert error != agent_module.TOOL_FAILED, raw
 
 
 def test_agent_survives_an_unexpected_tool_exception(monkeypatch):
@@ -122,7 +143,26 @@ def test_agent_survives_an_unexpected_tool_exception(monkeypatch):
     agent = SchedulingAgent(model, Store.load())
 
     assert agent.run("hi") == "Recovered."
-    assert "kaboom" in json.loads(model.calls[1][-1]["content"])["error"]
+    feedback = model.calls[1][-1]["content"]
+    assert json.loads(feedback)["error"] == agent_module.TOOL_FAILED
+    assert "kaboom" not in feedback
+
+
+def test_agent_hides_a_type_error_raised_inside_a_tool(monkeypatch):
+    def boom(store):
+        raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+    monkeypatch.setitem(agent_module.TOOLS, "list_people", boom)
+    model = FakeModel([tool_call("list_people"), final("Recovered.")])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("hi") == "Recovered."
+    # The call itself was fine, so a TypeError from inside the tool is a bug
+    # in the tool. Repeating it as an argument error would only send the
+    # model off correcting arguments that were right all along.
+    feedback = model.calls[1][-1]["content"]
+    assert json.loads(feedback)["error"] == agent_module.TOOL_FAILED
+    assert "unsupported operand" not in feedback
 
 
 def test_agent_survives_an_unserialisable_tool_result(monkeypatch):
@@ -136,7 +176,8 @@ def test_agent_survives_an_unserialisable_tool_result(monkeypatch):
     assert agent.run("hi") == "Recovered."
     feedback = model.calls[1][-1]
     assert feedback["role"] == "tool"
-    assert "error" in json.loads(feedback["content"])
+    assert json.loads(feedback["content"])["error"] == agent_module.TOOL_FAILED
+    assert "JSON serializable" not in feedback["content"]
 
 
 def test_agent_gives_up_after_max_steps():
