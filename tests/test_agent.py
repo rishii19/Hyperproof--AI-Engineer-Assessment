@@ -6,7 +6,12 @@ from scheduler import agent as agent_module
 from scheduler.agent import SchedulingAgent
 from scheduler.model import FakeModel, final, tool_call
 from scheduler.store import Store
-from scheduler.tools import ToolError, find_free_slots
+from scheduler.tools import (
+    MAX_RANGE_DAYS,
+    MAX_RESULTS_CAP,
+    ToolError,
+    find_free_slots,
+)
 
 
 def withheld_values() -> list[str]:
@@ -250,11 +255,15 @@ def test_system_prompt_states_the_range_tool_contract():
     """Naming the tool is not enough: say the limits it answers within.
 
     Each of these changes what the model does next. `truncated` says the
-    list was cut short; the cap and the 14-day span say how far a second
-    search can stretch; the weekend rule says an all-weekend range comes
-    back as an error, not as an empty week. The claim that a short list
-    reaches every day is not one of them - the round-robin fills up from
-    the earliest days and stops - so it must not be here to be believed.
+    list was cut short; the cap and the span limit say how far a second
+    search can stretch, and both are read off the constants the tool
+    enforces, so raising one without rewording the prompt fails here
+    rather than leaving the model a stale number. The weekend rule says
+    an all-weekend range comes back as an error, not as an empty week.
+    The caveat that the round-robin may stop before the later days keeps
+    the spread from being read as a promise; the claim that a short list
+    reaches every day is the over-claim it replaced, so that must not be
+    here to be believed.
     """
     model = FakeModel([final("ok")])
     SchedulingAgent(model, Store.load()).run("hi")
@@ -262,11 +271,17 @@ def test_system_prompt_states_the_range_tool_contract():
     # it with the line breaks flattened: rewrapping a paragraph should not
     # fail a test about what the paragraph says.
     system = " ".join(model.calls[0][0]["content"].split())
+    # The numbers are bare digits, so they are looked for in the range
+    # tool's own paragraph - "20" elsewhere in the prompt is not this
+    # tool's cap.
+    range_section = system.split("- find_free_slots_in_range")[1]
+    range_section = range_section.split("Respond ONLY")[0]
 
     assert "truncated" in system
-    assert "capped at 20" in system
-    assert "at most 14 days" in system
+    assert f"{MAX_RESULTS_CAP}" in range_section
+    assert f"{MAX_RANGE_DAYS}" in range_section
     assert "no weekday in it is rejected as an error" in system
+    assert "may never reach the later days" in system
     assert "every day that has something free" not in system
 
 

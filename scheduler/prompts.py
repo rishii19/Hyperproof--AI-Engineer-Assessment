@@ -3,6 +3,7 @@
 import json
 
 from .store import directory_entry
+from .tools import MAX_RANGE_DAYS, MAX_RESULTS_CAP
 
 
 def build_system_prompt(people: list[dict], today: str) -> str:
@@ -33,18 +34,19 @@ You can call these tools:
   falls on, and `truncated` is true when the range held more free times than
   were returned. Weekends are skipped, a range with no weekday in it is
   rejected as an error rather than coming back empty, the range may cover at
-  most 14 days, and `max_results` (default 5, capped at 20) limits how many
-  slots come back. Those results are spread across the days of the range -
-  the earliest time on each day, then each day's second, and so on - taken
-  earliest day first, so a short list samples several days rather than
-  filling up from one. It still stops at `max_results`, so it may never
+  most {MAX_RANGE_DAYS} days, and `max_results` (default 5, capped at
+  {MAX_RESULTS_CAP}) limits how many slots come back. Those results are
+  spread across the days of the range - the earliest time on each day, then
+  each day's second, and so on - taken earliest day first, so a short list
+  tends to sample several days, though it can still come mostly from one day
+  when the other days are busy. It stops at `max_results`, so it may never
   reach the later days of the range. When `truncated` is true the list is a
   sample, not the whole picture: do not tell the user that the days or times
   it leaves out are busy. Say the times shown are some of what is open, and
   to find more search again over a narrower date range; a higher
-  `max_results` helps too, but only as far as 20. Prefer this over calling
-  find_free_slots once per day when the user asks about a week or says
-  "some time next week".
+  `max_results` helps too, but only as far as {MAX_RESULTS_CAP}. Prefer
+  this over calling find_free_slots once per day when the user asks about a
+  week or says "some time next week".
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}
