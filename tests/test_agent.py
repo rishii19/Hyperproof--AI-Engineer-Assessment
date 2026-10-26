@@ -136,3 +136,32 @@ def test_consecutive_error_count_resets_after_a_good_tool_call():
     agent = SchedulingAgent(model, Store.load(), max_consecutive_errors=3)
 
     assert agent.run("hi") == "Got there in the end."
+
+
+def test_agent_calls_find_free_slots_in_range_across_several_days():
+    model = FakeModel([
+        tool_call("find_free_slots_in_range", attendees=["priya", "sam"],
+                  start_date="2026-11-02", end_date="2026-11-04",
+                  duration_minutes=60, earliest="13:00", max_results=5),
+        final("The best options are Monday at 14:00 or Tuesday at 13:00."),
+    ])
+    agent = SchedulingAgent(model, Store.load())
+
+    answer = agent.run("Find an hour for Priya and Sam sometime this week")
+
+    assert answer == "The best options are Monday at 14:00 or Tuesday at 13:00."
+    result = json.loads(model.calls[1][-1]["content"])
+    assert result == [
+        {"date": "2026-11-02", "start": "14:00", "end": "15:00"},
+        {"date": "2026-11-02", "start": "15:30", "end": "16:30"},
+        {"date": "2026-11-02", "start": "16:00", "end": "17:00"},
+        {"date": "2026-11-03", "start": "13:00", "end": "14:00"},
+        {"date": "2026-11-03", "start": "16:00", "end": "17:00"},
+    ]
+
+
+def test_system_prompt_documents_the_range_tool():
+    model = FakeModel([final("ok")])
+    SchedulingAgent(model, Store.load()).run("hi")
+    system = model.calls[0][0]["content"]
+    assert "find_free_slots_in_range" in system

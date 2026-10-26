@@ -1,7 +1,12 @@
 import pytest
 
 from scheduler.store import Store
-from scheduler.tools import ToolError, find_free_slots, get_busy_times
+from scheduler.tools import (
+    ToolError,
+    find_free_slots,
+    find_free_slots_in_range,
+    get_busy_times,
+)
 
 
 def test_get_busy_times():
@@ -156,3 +161,199 @@ def test_get_busy_times_rejects_unknown_person():
 
 def test_tool_error_is_a_value_error():
     assert issubclass(ToolError, ValueError)
+
+
+# --- find_free_slots_in_range -------------------------------------------
+
+
+def test_find_free_slots_in_range_orders_results_by_date_then_time():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-04", duration_minutes=30, earliest="16:00",
+    )
+    # Luis has "User interviews" 16:00-17:00 on the 3rd, so that day
+    # contributes nothing and the 2nd runs straight into the 4th.
+    assert results == [
+        {"date": "2026-11-02", "start": "16:00", "end": "16:30"},
+        {"date": "2026-11-02", "start": "16:30", "end": "17:00"},
+        {"date": "2026-11-04", "start": "16:00", "end": "16:30"},
+        {"date": "2026-11-04", "start": "16:30", "end": "17:00"},
+    ]
+    keys = [(r["date"], r["start"]) for r in results]
+    assert keys == sorted(keys)
+
+
+def test_find_free_slots_in_range_agrees_with_the_single_day_tool():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["priya", "sam"], start_date="2026-11-03",
+        end_date="2026-11-03", duration_minutes=30, earliest="13:00",
+        max_results=20,
+    )
+    single_day = find_free_slots(
+        store, attendees=["priya", "sam"], date="2026-11-03",
+        duration_minutes=30, earliest="13:00",
+    )
+    assert [{"date": "2026-11-03", **slot} for slot in single_day] == results
+
+
+def test_find_free_slots_in_range_skips_saturday_and_sunday():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-06",
+        end_date="2026-11-09", duration_minutes=30, earliest="16:00",
+        max_results=20,
+    )
+    # Friday the 6th, then straight to Monday the 9th.
+    assert [r["date"] for r in results] == [
+        "2026-11-06", "2026-11-06", "2026-11-09", "2026-11-09",
+    ]
+
+
+def test_find_free_slots_in_range_over_a_weekend_only_is_empty():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-07",
+        end_date="2026-11-08", duration_minutes=30,
+    )
+    assert results == []
+
+
+def test_find_free_slots_in_range_accepts_a_weekend_start_or_end():
+    store = Store.load()
+    # Unlike find_free_slots, the bounds of a range may fall on a weekend:
+    # only the days searched have to be weekdays.
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-07",
+        end_date="2026-11-09", duration_minutes=30, earliest="16:00",
+    )
+    assert [r["date"] for r in results] == ["2026-11-09", "2026-11-09"]
+
+
+def test_find_free_slots_in_range_defaults_to_five_results():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-04", duration_minutes=30,
+    )
+    assert results == [
+        {"date": "2026-11-02", "start": "09:00", "end": "09:30"},
+        {"date": "2026-11-02", "start": "09:30", "end": "10:00"},
+        {"date": "2026-11-02", "start": "10:00", "end": "10:30"},
+        {"date": "2026-11-02", "start": "10:30", "end": "11:00"},
+        {"date": "2026-11-02", "start": "11:00", "end": "11:30"},
+    ]
+
+
+def test_find_free_slots_in_range_truncates_to_max_results():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-04", duration_minutes=30, max_results=2,
+    )
+    assert len(results) == 2
+
+
+def test_find_free_slots_in_range_caps_max_results_at_twenty():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-04", duration_minutes=30, max_results=500,
+    )
+    # The 2nd alone offers 16 slots and the 3rd another 11, so the cap -
+    # not the calendar - is what stops the search.
+    assert len(results) == 20
+    assert {r["date"] for r in results} == {"2026-11-02", "2026-11-03"}
+
+
+def test_find_free_slots_in_range_rejects_bad_max_results():
+    store = Store.load()
+    for max_results in [0, -1, "5", 5.0, None, True]:
+        with pytest.raises(ToolError):
+            find_free_slots_in_range(
+                store, attendees=["luis"], start_date="2026-11-02",
+                end_date="2026-11-04", duration_minutes=30,
+                max_results=max_results,
+            )
+
+
+def test_find_free_slots_in_range_rejects_an_end_before_the_start():
+    store = Store.load()
+    with pytest.raises(ToolError) as excinfo:
+        find_free_slots_in_range(
+            store, attendees=["luis"], start_date="2026-11-04",
+            end_date="2026-11-02", duration_minutes=30,
+        )
+    message = str(excinfo.value)
+    assert "2026-11-04" in message and "2026-11-02" in message
+
+
+def test_find_free_slots_in_range_rejects_a_range_longer_than_two_weeks():
+    store = Store.load()
+    with pytest.raises(ToolError) as excinfo:
+        find_free_slots_in_range(
+            store, attendees=["luis"], start_date="2026-11-02",
+            end_date="2026-11-16", duration_minutes=30,
+        )
+    assert "14" in str(excinfo.value)
+
+
+def test_find_free_slots_in_range_allows_exactly_fourteen_days():
+    store = Store.load()
+    results = find_free_slots_in_range(
+        store, attendees=["luis"], start_date="2026-11-02",
+        end_date="2026-11-15", duration_minutes=30,
+    )
+    assert len(results) == 5
+
+
+def test_find_free_slots_in_range_rejects_bad_dates():
+    store = Store.load()
+    bad = [
+        {"start_date": "next Tuesday", "end_date": "2026-11-04"},
+        {"start_date": "2026-11-02", "end_date": "11/04/2026"},
+        {"start_date": "2026-13-01", "end_date": "2026-11-04"},
+        {"start_date": "2026-11-02", "end_date": None},
+    ]
+    for dates in bad:
+        with pytest.raises(ToolError):
+            find_free_slots_in_range(
+                store, attendees=["luis"], duration_minutes=30, **dates
+            )
+
+
+def test_find_free_slots_in_range_rejects_unknown_attendees():
+    store = Store.load()
+    with pytest.raises(ToolError) as excinfo:
+        find_free_slots_in_range(
+            store, attendees=["priya", "bob"], start_date="2026-11-02",
+            end_date="2026-11-04", duration_minutes=30,
+        )
+    message = str(excinfo.value)
+    assert "bob" in message
+    assert "priya" in message and "luis" in message  # the valid ids
+
+
+def test_find_free_slots_in_range_validates_even_with_no_weekdays_to_search():
+    store = Store.load()
+    # A Saturday-to-Sunday range searches nothing, but a bad argument is
+    # still a bad argument: the model should hear about it, not get [].
+    for kwargs in [
+        {"attendees": ["bob"], "duration_minutes": 30},
+        {"attendees": ["luis"], "duration_minutes": 0},
+        {"attendees": ["luis"], "duration_minutes": 30, "earliest": "9am"},
+        {"attendees": ["luis"], "duration_minutes": 30,
+         "earliest": "15:00", "latest": "13:00"},
+    ]:
+        with pytest.raises(ToolError):
+            find_free_slots_in_range(
+                store, start_date="2026-11-07", end_date="2026-11-08",
+                **kwargs,
+            )
+
+
+def test_find_free_slots_in_range_is_registered_as_a_tool():
+    from scheduler.tools import TOOLS
+
+    assert TOOLS["find_free_slots_in_range"] is find_free_slots_in_range
