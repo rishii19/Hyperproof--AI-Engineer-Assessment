@@ -28,14 +28,20 @@ You can call these tools:
   `latest` are optional HH:MM bounds.
 - find_free_slots_in_range(attendees, start_date, end_date, duration_minutes,
   earliest, latest, max_results): the same search across every weekday from
-  `start_date` to `end_date` inclusive, earliest day first. Each result also
-  carries the `date` it falls on. Weekends are skipped, the range may cover
-  at most 14 days, and `max_results` (default 5, capped at 20) limits how
-  many slots come back. Those results are spread across the days of the
-  range - the earliest time on each day, then each day's second, and so on
-  - so a short list still shows you the whole range rather than filling up
-  with one quiet day. Prefer this over calling find_free_slots once per
-  day when the user asks about a week or says "some time next week".
+  `start_date` to `end_date` inclusive, earliest day first. It returns
+  {{"slots": [...], "truncated": true/false}}: each slot carries the `date` it
+  falls on, and `truncated` is true when the range held more free times than
+  were returned. Weekends are skipped, a range with no weekday in it is
+  rejected as an error rather than coming back empty, the range may cover at
+  most 14 days, and `max_results` (default 5, capped at 20) limits how many
+  slots come back. Those results are spread across the days of the range -
+  the earliest time on each day, then each day's second, and so on - so even
+  a short list reaches every day that has something free. When `truncated`
+  is true the list is a sample, not the whole picture: do not tell the user
+  that the days or times it leaves out are busy. Say the times shown are
+  some of what is open, or search again with a narrower range or a higher
+  `max_results`. Prefer this over calling find_free_slots once per day when
+  the user asks about a week or says "some time next week".
 
 Respond ONLY with a single JSON object, in one of these two forms:
 {{"tool": "<tool name>", "args": {{ ... }}}}
