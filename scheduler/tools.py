@@ -1,7 +1,10 @@
 """Tools the agent can call. Each tool takes the Store plus keyword arguments
 and returns JSON-serialisable data."""
 
+import math
+
 from .slots import (
+    SLOT_MINUTES,
     availability_from_busy,
     combine_availability,
     find_free_windows,
@@ -9,6 +12,8 @@ from .slots import (
     time_to_slot,
 )
 from .store import Store
+
+MAX_DURATION_MINUTES = 480  # one full working day
 
 
 def list_people(store: Store) -> list[dict]:
@@ -32,15 +37,27 @@ def find_free_slots(
     """Find every time on `date` when all attendees are free for `duration_minutes`.
 
     `earliest` and `latest` optionally narrow the search to part of the day
-    (e.g. earliest="12:00" for "afternoon").
+    (e.g. earliest="12:00" for "afternoon"). Durations that are not a whole
+    number of slots are rounded up, so a 45-minute meeting reserves an hour.
     """
+    if isinstance(duration_minutes, bool) or not isinstance(duration_minutes, int):
+        raise ValueError(
+            f"duration_minutes must be a whole number of minutes, "
+            f"got {duration_minutes!r}"
+        )
+    if not 0 < duration_minutes <= MAX_DURATION_MINUTES:
+        raise ValueError(
+            f"duration_minutes must be between 1 and {MAX_DURATION_MINUTES}, "
+            f"got {duration_minutes}"
+        )
+
     calendars = []
     for person in attendees:
         busy = store.calendars.get(person, {}).get(date, [])
         calendars.append(availability_from_busy(busy))
 
     free = combine_availability(calendars)
-    slots_needed = duration_minutes // 30
+    slots_needed = math.ceil(duration_minutes / SLOT_MINUTES)
     start_slot = time_to_slot(earliest) if earliest else 0
     end_slot = time_to_slot(latest) if latest else None
 
