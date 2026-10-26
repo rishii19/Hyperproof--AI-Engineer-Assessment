@@ -98,3 +98,31 @@ def test_agent_survives_an_unexpected_tool_exception(monkeypatch):
 
     assert agent.run("hi") == "Recovered."
     assert "kaboom" in json.loads(model.calls[1][-1]["content"])["error"]
+
+
+def test_agent_gives_up_after_max_steps():
+    model = FakeModel([tool_call("list_people")], loop_last=True)
+    agent = SchedulingAgent(model, Store.load(), max_steps=8)
+
+    assert agent.run("who is everyone?") == agent_module.FALLBACK_ANSWER
+    assert len(model.calls) == 8
+
+
+def test_agent_gives_up_after_consecutive_errors():
+    model = FakeModel(["still not json"], loop_last=True)
+    agent = SchedulingAgent(model, Store.load(), max_consecutive_errors=3)
+
+    assert agent.run("hi") == agent_module.FALLBACK_ANSWER
+    assert len(model.calls) == 3
+
+
+def test_consecutive_error_count_resets_after_a_good_tool_call():
+    model = FakeModel([
+        "nope", "still nope",
+        tool_call("list_people"),
+        "nope again", "and again",
+        final("Got there in the end."),
+    ])
+    agent = SchedulingAgent(model, Store.load(), max_consecutive_errors=3)
+
+    assert agent.run("hi") == "Got there in the end."

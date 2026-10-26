@@ -39,6 +39,6 @@ class OpenAICompatibleModel:
                 "Authorization": f"Bearer {self.api_key}",
             },
         )
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.load(response)
         return payload["choices"][0]["message"]["content"]

@@ -8,6 +8,11 @@ from .prompts import build_system_prompt
 from .store import Store
 from .tools import TOOLS, ToolError
 
+FALLBACK_ANSWER = (
+    "Sorry - I wasn't able to work that out. Could you try rephrasing your "
+    "request, with the people and the date you have in mind?"
+)
+
 FENCE_PATTERN = re.compile(r"\A\s*```(?:json)?\s*\n?(.*?)\n?\s*```\s*\Z", re.DOTALL)
 
 
@@ -54,24 +59,36 @@ def parse_action(raw: str) -> tuple[dict | None, str | None]:
 
 
 class SchedulingAgent:
-    def __init__(self, model: Model, store: Store, today: str = "2026-11-02"):
+    def __init__(
+        self,
+        model: Model,
+        store: Store,
+        today: str = "2026-11-02",
+        max_steps: int = 8,
+        max_consecutive_errors: int = 3,
+    ):
         self.model = model
         self.store = store
         self.today = today
+        self.max_steps = max_steps
+        self.max_consecutive_errors = max_consecutive_errors
 
     def run(self, user_request: str) -> str:
         """Handle one user request and return the assistant's final answer.
 
         A malformed reply or a failing tool call is never raised at the caller:
         it is described back to the model as a tool result so that the next
-        turn can correct it.
+        turn can correct it. If the model runs past `max_steps` turns, or gets
+        `max_consecutive_errors` replies wrong in a row, give up and say so
+        rather than looping forever.
         """
         messages = [
             {"role": "system", "content": build_system_prompt(self.store.people, self.today)},
             {"role": "user", "content": user_request},
         ]
 
-        while True:
+        consecutive_errors = 0
+        for _ in range(self.max_steps):
             raw = self.model.complete(messages)
             messages.append({"role": "assistant", "content": raw})
 
@@ -86,7 +103,13 @@ class SchedulingAgent:
                 except Exception as exc:  # a tool bug must not kill the loop
                     error = f"{type(exc).__name__}: {exc}"
                 else:
+                    consecutive_errors = 0
                     messages.append({"role": "tool", "content": json.dumps(result)})
                     continue
 
             messages.append({"role": "tool", "content": json.dumps({"error": error})})
+            consecutive_errors += 1
+            if consecutive_errors >= self.max_consecutive_errors:
+                return FALLBACK_ANSWER
+
+        return FALLBACK_ANSWER
