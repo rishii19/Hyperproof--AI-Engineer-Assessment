@@ -121,16 +121,18 @@ def test_agent_feeds_bad_tool_arguments_back_to_the_model():
     # what it is - something the next turn can fix - and never mistaken for
     # the tool falling over.
     bad_calls = [
-        (tool_call("list_people", when="now"), "when"),
-        (tool_call("get_busy_times", person="sam"), "date"),
+        (tool_call("list_people", when="now"),
+         "list_people: unexpected argument(s): when"),
+        (tool_call("get_busy_times", person="sam"),
+         "get_busy_times: missing required argument(s): date"),
     ]
-    for raw, argument in bad_calls:
+    for raw, expected in bad_calls:
         model = FakeModel([raw, final("Recovered.")])
         agent = SchedulingAgent(model, Store.load())
 
         assert agent.run("hi") == "Recovered."
         error = json.loads(model.calls[1][-1]["content"])["error"]
-        assert f"'{argument}'" in error, raw
+        assert error == expected, raw
         assert error != agent_module.TOOL_FAILED, raw
 
 
@@ -324,3 +326,120 @@ def test_agent_rejects_an_unfenced_object_buried_in_prose():
 
     assert agent.run("hi") == "Recovered."
     assert "error" in json.loads(model.calls[1][-1]["content"])
+
+
+def argument_error(model: FakeModel) -> str:
+    """The error the agent fed back after the first scripted reply."""
+    feedback = model.calls[1][-1]
+    assert feedback["role"] == "tool"
+    return json.loads(feedback["content"])["error"]
+
+
+def test_an_empty_call_names_the_tool_and_every_argument_it_needs():
+    model = FakeModel([tool_call("find_free_slots"), final("Recovered.")])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("find us a time") == "Recovered."
+    # Every required argument in signature order, so one turn is enough to
+    # fix the call. The store is the agent's to pass and earliest/latest
+    # have defaults, so neither is anything for the model to supply.
+    assert argument_error(model) == (
+        "find_free_slots: missing required argument(s): "
+        "attendees, date, duration_minutes"
+    )
+
+
+def test_one_error_names_both_the_missing_and_the_unexpected_arguments():
+    model = FakeModel([
+        tool_call("get_busy_times", person="sam", when="now", why="curious"),
+        final("Recovered."),
+    ])
+    agent = SchedulingAgent(model, Store.load())
+
+    assert agent.run("when is Sam busy?") == "Recovered."
+    # Both faults in one message: fixing either alone would only earn the
+    # same error back with the other half of it.
+    assert argument_error(model) == (
+        "get_busy_times: missing required argument(s): date; "
+        "unexpected argument(s): when, why"
+    )
+
+
+def named_arguments(error: str, clause: str) -> list[str]:
+    """The argument names one clause of an argument error lists."""
+    for part in error.split("; "):
+        prefix = f"{clause}: "
+        if prefix in part:
+            return part.split(prefix, 1)[1].split(", ")
+    return []
+
+
+class AdaptiveModel:
+    """A model that corrects exactly what the last error named, and no more.
+
+    It reads neither the request nor the tool's documentation: every argument
+    name it sends is one it was handed, by the test to begin with and by the
+    agent's own error message afterwards. Getting the call right after a
+    single error is therefore the test that the message named the whole of
+    what was wrong with it.
+    """
+
+    PLAUSIBLE = {
+        "attendees": ["priya", "sam"],
+        "date": "2026-11-03",
+        "start_date": "2026-11-02",
+        "end_date": "2026-11-04",
+        "duration_minutes": 60,
+    }
+
+    def __init__(self, tool: str, args: dict):
+        self.tool = tool
+        self.args = dict(args)
+        self.errors = 0
+
+    def complete(self, messages: list[dict]) -> str:
+        last = messages[-1]
+        if last["role"] == "tool":
+            result = json.loads(last["content"])
+            if not (isinstance(result, dict) and "error" in result):
+                return final("Found it.")
+            self.errors += 1
+            error = result["error"]
+            # A KeyError from either line would mean the message named an
+            # argument the model had no way to act on.
+            for argument in named_arguments(error, "missing required argument(s)"):
+                self.args[argument] = self.PLAUSIBLE[argument]
+            for argument in named_arguments(error, "unexpected argument(s)"):
+                del self.args[argument]
+        return tool_call(self.tool, **self.args)
+
+
+def test_a_model_that_fixes_what_the_error_names_recovers_in_one_turn():
+    muddled_calls = [
+        ("find_free_slots",
+         {"attendee": ["priya"], "day": "2026-11-03"}),
+        ("find_free_slots_in_range",
+         {"attendees": ["priya", "sam"], "date": "2026-11-03",
+          "duration_minutes": 60}),
+    ]
+    for tool, args in muddled_calls:
+        model = AdaptiveModel(tool, args)
+        agent = SchedulingAgent(model, Store.load())
+
+        assert agent.run("find us a time") == "Found it.", tool
+        assert model.errors == 1, tool
+
+
+def test_agent_survives_a_tool_with_no_readable_signature(monkeypatch):
+    # A builtin has no signature to read, so there is nothing to bind the
+    # arguments against. The call goes ahead and whatever it raises is the
+    # tool's failure, not a call the model can be asked to correct.
+    monkeypatch.setitem(agent_module.TOOLS, "list_people", min)
+    model = FakeModel([tool_call("list_people"), final("Recovered.")])
+    agent = SchedulingAgent(model, Store.load())
+
+    answer = agent.run("who works here?")
+
+    assert isinstance(answer, str)
+    assert answer == "Recovered."
+    assert argument_error(model) == agent_module.TOOL_FAILED

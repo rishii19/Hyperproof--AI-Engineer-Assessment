@@ -35,6 +35,49 @@ def _invalid_json(exc: ValueError) -> str:
     )
 
 
+def _argument_error(
+    name: str, signature: inspect.Signature, args: dict
+) -> str | None:
+    """Name the arguments that stop a call binding, or None if they all bind.
+
+    Written from the signature rather than from the binder's TypeError: the
+    binder stops at the first thing it trips over and words it for whoever
+    wrote the Python, so a call with two faults in it costs two turns. Every
+    wrong name at once, in the tool's own order, is the whole of what the
+    next turn needs. The store is the agent's to pass rather than the
+    model's, so it is left out of both the check and the message.
+
+    None means the names are all fine and the binder objected to something
+    else; the caller then lets the call itself fail.
+    """
+    nameable = (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
+    parameters = list(signature.parameters.values())[1:]  # drop the store
+    expected = {p.name: p for p in parameters if p.kind in nameable}
+
+    missing = [
+        argument
+        for argument, parameter in expected.items()
+        if parameter.default is inspect.Parameter.empty and argument not in args
+    ]
+    # A tool that takes **kwargs has no unexpected arguments to report.
+    takes_extra = any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters
+    )
+    unexpected = [] if takes_extra else [a for a in args if a not in expected]
+
+    clauses = []
+    if missing:
+        clauses.append(f"missing required argument(s): {', '.join(missing)}")
+    if unexpected:
+        clauses.append(f"unexpected argument(s): {', '.join(unexpected)}")
+    if not clauses:
+        return None
+    return f"{name}: {'; '.join(clauses)}"
+
+
 def parse_action(raw: str) -> tuple[dict | None, str | None]:
     """Parse one model reply into an action.
 
@@ -97,17 +140,29 @@ class SchedulingAgent:
         """Run one tool call, returning `(json_result, None)` or `(None, error)`.
 
         Binding the arguments first keeps the two kinds of failure apart. A
-        call the model got wrong is described back to it in the binder's own
-        words, so the next turn can fix the argument. Anything the tool then
-        raises - a bug in it, or a result that will not serialise - is the
-        model's to work around rather than to correct, so it comes back as
-        one generic failure with no internals quoted at it.
+        call the model got wrong comes back as the argument names it missed
+        or invented, which the next turn can act on directly. Anything the
+        tool then raises - a bug in it, or a result that will not serialise -
+        is the model's to work around rather than to correct, so it comes
+        back as one generic failure with no internals quoted at it.
+
+        A callable with no signature to read - a builtin, say - is simply
+        called: there is nothing to check the arguments against, so whatever
+        goes wrong there is the tool's rather than the call's.
         """
         tool = TOOLS[name]
         try:
-            inspect.signature(tool).bind(self.store, **args)
-        except TypeError as exc:
-            return None, str(exc)
+            signature = inspect.signature(tool)
+        except (ValueError, TypeError):
+            signature = None
+
+        if signature is not None:
+            try:
+                signature.bind(self.store, **args)
+            except TypeError:
+                error = _argument_error(name, signature, args)
+                if error is not None:
+                    return None, error
 
         try:
             return json.dumps(tool(self.store, **args)), None
